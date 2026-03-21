@@ -3,14 +3,16 @@
 ## 项目结构
 
 ```
-testing_agent/
+stupid_agent/
 ├── main.py                  # ★ 入口：在这里填写测试框架，然后运行
 ├── config.py                # 配置（API Key、超时等）
 ├── requirements.txt
 │
 ├── agents/
-│   ├── planner_agent.py     # Agent 1：测试规划（调用 Claude API 细化任务）
-│   └── executor_agent.py    # Agent 2：测试执行（调用本地终端）+ 结果分析
+│   ├── planner_agent.py             # Agent 1：测试规划（调用 Claude API 细化任务）
+│   ├── executor_agent.py            # Agent 2：测试执行（调用本地终端）+ 结果分析
+│   ├── env_agent.py                 # Agent 3：环境配置（调用 Claude API）
+│   └── static_analysis_agent.py     # Agent 4：拉取并分析源码
 │
 ├── core/
 │   ├── terminal.py          # 本地终端交互封装（subprocess）
