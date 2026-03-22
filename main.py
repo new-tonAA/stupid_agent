@@ -114,7 +114,7 @@ def main():
 
     # ── Step 5：ExecutorAgent 执行测试 ──────────────────────────
     executor = ExecutorAgent(workdir=project_root)
-    report = executor.run_all(tasks, project_name=framework["project_name"])
+    report = executor.run_all(tasks, project_name=framework["project_name"], framework=framework)
 
     # ── Step 6：输出报告 ─────────────────────────────────────────
     print(report.summary())
