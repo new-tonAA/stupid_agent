@@ -84,9 +84,12 @@ class ExecutorAgent:
     def __init__(self, workdir: str = "."):
         self._terminal = TerminalExecutor(workdir=workdir)
         self._llm = LLMClient()
+        self._tool_path = ""  # 由 run_all 从 framework 注入
 
-    def run_all(self, tasks: list[TestTask], project_name: str = "项目") -> TestReport:
+    def run_all(self, tasks: list[TestTask], project_name: str = "项目",
+                framework: dict = None) -> TestReport:
         report = TestReport(project_name=project_name, total=len(tasks))
+        self._tool_path = (framework or {}).get("_tool_path", "")
 
         for i, task in enumerate(tasks):
             print(f"\n[ExecutorAgent] 执行任务 {task.task_id} ({i+1}/{len(tasks)}): {task.description}")
@@ -108,7 +111,7 @@ class ExecutorAgent:
     def _run_task(self, task: TestTask) -> TaskResult:
         cmd_results = []
         for cmd in task.commands:
-            cmd_results.append(self._terminal.run(cmd))
+            cmd_results.append(self._terminal.run(self._fix_cmd_path(cmd)))
 
         # 使用最后一条命令的结果作为主结果
         last = cmd_results[-1] if cmd_results else None
@@ -189,3 +192,36 @@ stderr：{result.stderr[:500]}
             return self._llm.chat(ANALYZER_SYSTEM, user_msg)
         except Exception as e:
             return f"（LLM 分析失败: {e}）"
+
+    def _fix_cmd_path(self, cmd: str) -> str:
+        """
+        如果命令里用了相对路径（.\\sqlite3.exe 或 sqlite3），
+        且我们有绝对路径，自动替换，确保跨机器可用。
+        """
+        if not self._tool_path:
+            return cmd
+
+        import os
+        tool_name = os.path.basename(self._tool_path)          # sqlite3.exe
+        tool_name_no_ext = os.path.splitext(tool_name)[0]      # sqlite3
+
+        replacements = [
+            (f".\\{tool_name}", f'"{self._tool_path}"'),
+            (f"./{tool_name}", f'"{self._tool_path}"'),
+            (f".\\{tool_name_no_ext}", f'"{self._tool_path}"'),
+            (f"./{tool_name_no_ext}", f'"{self._tool_path}"'),
+        ]
+        for old_str, new_str in replacements:
+            if old_str in cmd:
+                cmd = cmd.replace(old_str, new_str)
+                print(f"  [ExecutorAgent] 路径已修正: {old_str} → {new_str}")
+                return cmd
+
+        # 如果命令以裸工具名开头（没有路径前缀），也替换
+        import re
+        pattern = rf'^{re.escape(tool_name_no_ext)}(?:\.exe)?\b'
+        if re.match(pattern, cmd.strip(), re.IGNORECASE):
+            cmd = re.sub(pattern, f'"{self._tool_path}"', cmd.strip(), count=1, flags=re.IGNORECASE)
+            print(f"  [ExecutorAgent] 裸名已修正 → 使用绝对路径")
+
+        return cmd

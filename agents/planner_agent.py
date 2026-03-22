@@ -80,18 +80,25 @@ class PlannerAgent:
             )
             print(f"[PlannerAgent] 已载入静态分析结果（{len(static_report.risk_points)} 个风险点）")
 
+        # 从 EnvAgent 获取绝对路径，确保跨机器可用
+        tool_path = framework.get('_tool_path') or framework.get('binary', '')
+        run_prefix = framework.get('_run_prefix', tool_path)
+
         user_prompt = f"""
 请为以下软件项目生成详细测试任务：
 
-项目名称：{framework.get('project_name', '未命名')}
-编程语言：{framework.get('language', '未知')}
-可执行文件：{framework.get('binary', '')}
-项目描述：{framework.get('description', '')}
-测试目标：{', '.join(framework.get('test_goals', []))}
-补充说明：{framework.get('extra_notes', '无')}
+项目名称：{framework.get("project_name", "未命名")}
+编程语言：{framework.get("language", "未知")}
+【重要】可执行文件绝对路径：{tool_path}
+【重要】调用命令必须使用此绝对路径，不要用相对路径或只写文件名
+项目描述：{framework.get("description", "")}
+测试目标：{", ".join(framework.get("test_goals", []))}
+补充说明：{framework.get("extra_notes", "无")}
 {static_summary}
 
-请生成测试任务 JSON 数组。commands 中的命令假设在项目根目录下执行。
+请生成测试任务 JSON 数组。
+commands 中每条命令必须使用上方提供的【绝对路径】调用可执行文件，例如：
+"{tool_path}" :memory: "SELECT 1+1;"
 """
         raw_tasks = self._llm.chat_json(PLANNER_SYSTEM, user_prompt)
 
