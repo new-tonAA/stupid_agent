@@ -30,11 +30,13 @@ PLANNER_SYSTEM = """
 - expected_value: 当 oracle_type 为 stdout_match/stdout_exact 时，填写期望的字符串；其他情况填 null
 
 要求：
-- 生成 15~20 个有代表性的测试任务
+- 生成 12~15 个有代表性的测试任务
 - 覆盖正常路径、边界值、异常场景
 - 如果有静态分析风险点，必须为每个 high/medium 风险点生成至少一个对应的测试任务，
   这类任务的 category 标记为「静态分析驱动」
 - commands 中的命令要可以直接在终端执行，不要有占位符
+- SQL 语句中避免使用单引号字符串字面量（如 'Alice'），改用数字（如 1,2,3）或 char() 函数，防止 JSON 引号冲突
+- 如果 SQL 必须用字符串，用双引号并用反斜杠转义：\"value\"
 """
 
 
