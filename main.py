@@ -27,7 +27,7 @@ TEST_FRAMEWORK = {
     "binary": "sqlite3",
 
     # 不需要编译
-    "compile_cmd": "",
+    "compile_cmd": "\"C:\\Program Files (x86)\\Embarcadero\\Dev-Cpp\\TDM-GCC-64\\bin\\gcc.exe\" tests/sample_c/calculator.c -o tests/sample_c/calculator.exe -lm",
 
     "description": (
         "SQLite3 是世界上使用最广泛的嵌入式关系型数据库引擎，由 C 语言编写。"
