@@ -50,9 +50,6 @@ class TerminalExecutor:
         """
         print(f"  [Terminal] $ {command}")
         try:
-            # 把当前 Python 进程的完整 PATH 传给子进程
-            # 解决 conda 环境下子进程 PATH 丢失的问题
-            env = os.environ.copy()
             proc = subprocess.run(
                 command,
                 shell=True,
@@ -60,7 +57,6 @@ class TerminalExecutor:
                 text=True,
                 timeout=timeout,
                 cwd=self.workdir,
-                env=env,
             )
             result = CmdResult(
                 command=command,
