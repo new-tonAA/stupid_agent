@@ -18,14 +18,10 @@ stupid_agent/
 │
 ├── core/
 │   ├── terminal.py          # 本地终端交互封装（subprocess）
-│   ├── llm_client.py        # Claude API 封装
+│   ├── llm_client.py        # Claude API 封装、或者其他 API 封装
 │   └── reporter.py          # 报告输出（JSON + Markdown）
 │
-├── output/                  # 测试报告自动保存到这里
-│
-└── tests/
-    └── sample_c/
-        └── calculator.c     # 示例被测 C 程序（含若干缺陷供发现）
+└──  output/                  # 测试报告自动保存到这里
 ```
 
 ## 快速开始
@@ -80,13 +76,26 @@ pip install -r requirements.txt
 ```
 
 ### 2. 设置 API Key（请勿泄露，很贵）
-
+如果使用claude，则使用OpenRouter（跟以前一样）：
 ```bash
 # Linux / macOS
 export ANTHROPIC_API_KEY="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"
 
 # Windows PowerShell
 $env:ANTHROPIC_API_KEY="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"
+```
+如果使用其他（或者盗版claude），则采用api.v3.cm
+```bash
+$env:LLM_PROVIDER="v3"
+$env:V3_API_KEY="sk-yFdUWpyS4iTwnT8GD1903a92Da60409cB8B4Be85F16a334d"
+$env:V3_MODEL="gpt-4o"   # 或 qwen3-vl-plus 等，不填默认 gpt-4o，具体有什么模型见：https://api.v3.cm
+python main.py
+```
+如果嫌弃环境变了麻烦，也可以在 config.py 里直接改（不用环境变量），但是不推荐哈：
+```python
+pythonLLM_PROVIDER = "v3"     # 改这一行
+V3_API_KEY = "你的key"         # 填这里
+V3_MODEL = "gpt-4o"           # 选模型
 ```
 
 如果是在 PyCharm 中：Run → Edit Configurations → Environment Variables，添加 `ANTHROPIC_API_KEY`。
