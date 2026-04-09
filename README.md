@@ -24,6 +24,16 @@ stupid_agent/
 └──  output/                  # 测试报告自动保存到这里
 ```
 
+## 🚀 Features
+- **EnvAgent**: Automatically detects and installs compilers and tools  
+- **StaticAnalysisAgent**: Performs white-box analysis on source code  
+- **PlannerAgent**: Generates tasks using combined black-box and white-box strategies  
+- **ExecutorAgent**: Executes tasks in a real terminal environment  
+- **RefinementAgent**: Refines results based on failures  
+- **Dual-platform LLM switching**  
+- **JSON + Markdown reporting**
+
+
 ## 快速开始
 ### 0. 找到或安装gcc用于编译cpp (MinGW)（其实可以不做，直接让agent做，可以试试，但是得把1后的先配好）
 如果本来就有cpp编译器，则寻找：
