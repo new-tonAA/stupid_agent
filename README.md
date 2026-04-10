@@ -14,7 +14,8 @@ stupid_agent/
 │   ├── executor_agent.py            # Agent 2：测试执行（调用本地终端）+ 结果分析
 │   ├── env_agent.py                 # Agent 3：环境配置（调用 Claude API）
 │   ├── refinement_agent.py          # Agent 4：针对现有测试错误进一步进行精细化测试
-│   └── static_analysis_agent.py     # Agent 5：拉取并分析源码
+│   ├── reporter_write_agent.py      # Agent 5：帮助撰写测试报告
+│   └── static_analysis_agent.py     # Agent 6：拉取并分析源码
 │
 ├── core/
 │   ├── terminal.py          # 本地终端交互封装（subprocess）
@@ -35,7 +36,7 @@ stupid_agent/
 
 
 ## 快速开始
-### 0. 找到或安装gcc用于编译cpp (MinGW)（其实可以不做，直接让agent做，可以试试，但是得把1后的先配好）
+### 0. 找到或安装gcc用于编译cpp (MinGW)（其实可以不做，直接让agent做，但是得把1后的先配好）
 如果本来就有cpp编译器，则寻找：
 ```bash
 Get-ChildItem -Path "D:\","E:\","C:\" -Recurse -Filter "gcc.exe" -ErrorAction SilentlyContinue | Select-Object FullName
@@ -141,7 +142,7 @@ TEST_FRAMEWORK = {
 ```
 人工填写 TEST_FRAMEWORK
         ↓
-  PlannerAgent（Claude API）
+  PlannerAgent（LLM API，最终建议用 Claude）
   ——细化为 10~20 个测试任务——
         ↓
   ExecutorAgent（subprocess）
