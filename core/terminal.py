@@ -50,19 +50,33 @@ class TerminalExecutor:
         """
         print(f"  [Terminal] $ {command}")
         try:
+            # 把当前 Python 进程的完整 PATH 传给子进程
+            # 解决 conda 环境下子进程 PATH 丢失的问题
+            env = os.environ.copy()
+            # text=False 先拿原始 bytes，再手动解码，避免 GBK 编码错误
             proc = subprocess.run(
                 command,
                 shell=True,
                 capture_output=True,
-                text=True,
+                text=False,
                 timeout=timeout,
                 cwd=self.workdir,
+                env=env,
             )
+            def _decode(b: bytes) -> str:
+                """尝试 utf-8，失败则 gbk，再失败则忽略无法解码的字节"""
+                for enc in ("utf-8", "gbk", "latin-1"):
+                    try:
+                        return b.decode(enc)
+                    except (UnicodeDecodeError, AttributeError):
+                        continue
+                return b.decode("utf-8", errors="replace")
+
             result = CmdResult(
                 command=command,
                 returncode=proc.returncode,
-                stdout=proc.stdout.strip(),
-                stderr=proc.stderr.strip(),
+                stdout=_decode(proc.stdout).strip(),
+                stderr=_decode(proc.stderr).strip(),
             )
         except subprocess.TimeoutExpired:
             result = CmdResult(
