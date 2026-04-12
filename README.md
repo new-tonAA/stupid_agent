@@ -99,7 +99,7 @@ $env:ANTHROPIC_API_KEY="sk-or-v1-f5867f2bff147f7525559083de7193fbb2539bd94a37b09
 ```bash
 $env:LLM_PROVIDER="v3"
 $env:V3_API_KEY="sk-yFdUWpyS4iTwnT8GD1903a92Da60409cB8B4Be85F16a334d"
-$env:V3_MODEL="gpt-4o"   # 或 qwen3-vl-plus 等，不填默认 gpt-4o，具体有什么模型见：https://api.v3.cm
+$env:V3_MODEL="claude-sonnet-4-6"   # 或 gpt-4o 等，不填默认 gpt-4o，具体有什么模型见：https://api.v3.cm
 python main.py
 ```
 如果嫌弃环境变了麻烦，也可以在 config.py 里直接改（不用环境变量），但是不推荐哈：

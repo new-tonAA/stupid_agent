@@ -114,41 +114,105 @@ def main():
     print(report.summary())
     print(f"\n第一轮完成：{report.passed} 通过 / {report.failed} 失败 / {report.errors} 错误")
 
-    # ── Step 6：RefinementAgent 精化失败任务 ─────────────────────
-    refined_tasks = []
-    refined_report = None
+    # ── Step 6：多轮精化迭代 ────────────────────────────────────
+    # 精化目的：
+    #   - 确认失败是"程序bug"还是"测试设计问题"
+    #   - 如果是程序bug，找到最小复现用例
+    #   - 如果还有失败，继续迭代（但不重复已测场景）
+    MAX_REFINE_ROUNDS = 3   # 最多迭代几轮
+    all_refined_reports = []
+    all_refined_tasks = []
+    confirmed_bugs = []     # 跨轮次确认的真实 bug
 
-    if report.failed > 0 or report.errors > 0:
-        refiner = RefinementAgent()
-        refined_tasks = refiner.refine(report, framework)
+    current_report = report  # 每轮基于上一轮的失败继续精化
+    refiner = RefinementAgent()
+    # 记录所有已测过的命令，避免重复
+    tested_commands = set(
+        cr.command
+        for r in report.results
+        for cr in r.cmd_results
+    )
 
-        if refined_tasks:
-            print(f"\n[Main] 精化任务预览（共 {len(refined_tasks)} 个）：")
-            for task in refined_tasks:
-                print(f"  {task.task_id} {task.description}")
-            input("\n按 Enter 开始第二轮精化测试...")
+    for round_num in range(1, MAX_REFINE_ROUNDS + 1):
+        still_failed = [
+            r for r in current_report.results
+            if r.verdict in ("FAIL", "ERROR")
+        ]
+        if not still_failed:
+            print(f"\n[Main] 第{round_num}轮精化前无失败用例，停止迭代。")
+            break
 
-            # ── Step 7：第二轮执行精化任务 ───────────────────────
-            refined_report = executor.run_all(
-                refined_tasks,
-                project_name=framework["project_name"] + "（精化轮）",
-                framework=framework,
-            )
-            print(refined_report.summary())
-        else:
-            print("\n[Main] 未生成有效精化任务，跳过第二轮。")
+        print(f"\n{'='*50}")
+        print(f"  精化迭代第 {round_num} 轮（还有 {len(still_failed)} 个失败）")
+        print(f"{'='*50}")
+
+        # 生成精化任务，去掉已测过的命令
+        round_tasks = refiner.refine(current_report, framework)
+        # 过滤重复命令
+        new_tasks = []
+        for t in round_tasks:
+            filtered_cmds = [c for c in t.commands if c not in tested_commands]
+            if filtered_cmds:
+                t.commands = filtered_cmds
+                new_tasks.append(t)
+            else:
+                print(f"  [Main] 跳过重复任务: {t.task_id}")
+
+        if not new_tasks:
+            print(f"[Main] 第{round_num}轮没有新的精化任务，停止迭代。")
+            break
+
+        print(f"\n[Main] 第{round_num}轮精化任务（{len(new_tasks)} 个）：")
+        for task in new_tasks:
+            print(f"  {task.task_id} {task.description[:60]}")
+        input(f"\n按 Enter 开始第{round_num}轮精化测试...")
+
+        round_report = executor.run_all(
+            new_tasks,
+            project_name=f"{framework['project_name']}（精化第{round_num}轮）",
+            framework=framework,
+        )
+        print(round_report.summary())
+
+        # 记录本轮命令，防止下轮重复
+        for r in round_report.results:
+            for cr in r.cmd_results:
+                tested_commands.add(cr.command)
+
+        all_refined_reports.append(round_report)
+        all_refined_tasks.extend(new_tasks)
+
+        # 判断哪些是真实 bug（精化后仍然失败，且分析不含"符合预期"）
+        for r in round_report.results:
+            if not r.passed:
+                analysis_lower = (r.analysis or "").lower()
+                is_design_issue = any(kw in analysis_lower for kw in
+                    ["未发现缺陷", "符合预期", "测试设计", "期望值", "正常行为", "正确行为"])
+                if not is_design_issue:
+                    confirmed_bugs.append(r)
+                    print(f"  🐛 确认 bug：{r.task.task_id} - {r.task.description[:50]}")
+
+        current_report = round_report  # 下一轮基于本轮失败继续
+
+    if confirmed_bugs:
+        print(f"\n[Main] 🐛 多轮精化后确认 {len(confirmed_bugs)} 个疑似程序缺陷：")
+        for r in confirmed_bugs:
+            print(f"  - {r.task.task_id}: {r.task.description[:60]}")
     else:
-        print("\n[Main] 全部通过，无需精化。")
+        print("\n[Main] ✅ 多轮精化后未确认程序缺陷（失败均为测试设计问题）。")
 
-    # ── Step 8：输出报告 ─────────────────────────────────────────
+    # ── Step 7：输出报告 ─────────────────────────────────────────
     reporter = Reporter()
     json_path, md_path = reporter.save(report)
-    _append_static_to_report(md_path, static_report)
+    from core.reporter import append_static_analysis, append_refined_results, append_overall_summary
+    append_static_analysis(md_path, static_report)
 
-    # 如果有精化报告，追加进去
-    if refined_report:
-        _append_refined_to_report(md_path, refined_report, refined_tasks)
-        reporter.save(refined_report)  # 也单独保存精化报告
+    for i, (rpt, tasks) in enumerate(zip(all_refined_reports, [all_refined_tasks])):
+        append_refined_results(md_path, rpt, tasks, round_num=i+1,
+                               confirmed_bugs=confirmed_bugs)
+
+    append_overall_summary(md_path, report, static_report,
+                           confirmed_bugs=confirmed_bugs)
 
     print(f"\n[Main] 报告已生成：")
     print(f"  JSON     : {json_path}")
@@ -156,39 +220,6 @@ def main():
     print("\n[Main] 测试完成。")
 
 
-def _append_static_to_report(md_path: str, static_report):
-    if not static_report or not static_report.risk_points:
-        return
-    with open(md_path, "a", encoding="utf-8") as f:
-        f.write("\n## 静态代码分析结果\n\n")
-        f.write(f"- 源文件：`{static_report.source_file}`\n")
-        f.write(f"- 源码行数：{static_report.total_lines}\n")
-        f.write(f"- 分析片段数：{static_report.analyzed_snippets}\n")
-        f.write(f"- 风险点数：{len(static_report.risk_points)}\n\n")
-        for rp in static_report.risk_points:
-            icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(rp.severity, "⚪")
-            f.write(f"### {icon} {rp.risk_id} — {rp.risk_type}\n\n")
-            f.write(f"- **位置**：{rp.location}\n")
-            f.write(f"- **描述**：{rp.description}\n")
-            f.write(f"- **触发条件**：{rp.trigger_condition}\n")
-            f.write(f"- **测试建议**：{rp.test_suggestion}\n")
-            f.write(f"- **严重程度**：{rp.severity}\n\n---\n\n")
-
-
-def _append_refined_to_report(md_path: str, refined_report, refined_tasks):
-    with open(md_path, "a", encoding="utf-8") as f:
-        f.write("\n## 第二轮精化测试结果\n\n")
-        f.write(f"- 精化任务数：{refined_report.total}\n")
-        f.write(f"- 通过：{refined_report.passed}\n")
-        f.write(f"- 失败：{refined_report.failed}\n")
-        f.write(f"- 通过率：{refined_report.pass_rate:.1f}%\n\n")
-        for r in refined_report.results:
-            icon = "✅" if r.passed else "❌"
-            f.write(f"### {icon} {r.task.task_id} — {r.task.description}\n\n")
-            f.write(f"- **判定**：{r.verdict}\n")
-            if r.analysis:
-                f.write(f"- **分析**：{r.analysis}\n")
-            f.write("\n---\n\n")
 
 
 if __name__ == "__main__":
