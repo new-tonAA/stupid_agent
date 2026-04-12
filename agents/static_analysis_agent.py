@@ -1,91 +1,99 @@
-# agents/static_analysis_agent.py  —— 静态分析智能体
+# agents/static_analysis_agent.py  —— 静态分析智能体（增强版）
 """
-职责：
-  1. 下载或读取被测程序源码
-  2. 提取关键函数/模块（避免一次性喂太多 token）
-  3. 调用 LLM 分析源码中的潜在风险点
-  4. 输出结构化的「风险报告」，供 PlannerAgent 生成针对性测试用例
-
-对于 sqlite3 这类超大源码（23万行），采用分块抽样策略：
-  - 自动识别高风险函数名（除法、内存分配、字符串处理等）
-  - 只截取这些函数附近的代码片段送给 LLM
-  - 避免超出 token 限制
+改进点：
+  1. 持久化历史：记录每次分析过的行范围，下次自动跳过
+  2. LLM 智能选片段：不再靠固定关键词，让 LLM 读函数列表后决定分析哪些
+  3. 多策略采样：结合关键词匹配 + LLM 推荐 + 随机采样，最大化覆盖
 """
 
 import os
 import re
+import json
+import random
 import urllib.request
+import zipfile
 from dataclasses import dataclass, field
 from core.llm_client import LLMClient
 
-
-# sqlite3 amalgamation 源码下载地址
 SQLITE3_SRC_URL = "https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip"
 SQLITE3_SRC_DIR = "sqlite3_src"
 SQLITE3_SRC_FILE = "sqlite3.c"
 
-# 触发分析的高风险关键词（函数名/模式）
+# 历史记录文件，记录已分析过的行范围
+HISTORY_FILE = "static_analysis_history.json"
+
+# 关键词分层：高风险 / 中风险 / 低风险
 HIGH_RISK_PATTERNS = [
-    r"\/",           # 除法操作
-    r"malloc\s*\(",  # 内存分配
-    r"realloc\s*\(", # 内存重分配
-    r"free\s*\(",    # 内存释放
-    r"strlen\s*\(",  # 字符串长度
-    r"strcpy\s*\(",  # 字符串复制（经典溢出风险）
-    r"sprintf\s*\(", # 格式化字符串
-    r"atoi\s*\(",    # 字符串转整数
-    r"overflow",     # 溢出相关注释
-    r"SQLITE_MAX",   # 最大值限制
-    r"assert\s*\(",  # 断言（说明开发者认为这里可能出错）
+    r"\/\s*\(",           # 除法
+    r"malloc\s*\(",       # 内存分配
+    r"realloc\s*\(",
+    r"strcpy\s*\(",       # 不安全字符串
+    r"strcat\s*\(",
+    r"sprintf\s*\(",
+    r"gets\s*\(",
+    r"memcpy\s*\(",
+    r"overflow",
+    r"underflow",
+]
+MED_RISK_PATTERNS = [
+    r"atoi\s*\(",
+    r"atof\s*\(",
+    r"strlen\s*\(",
+    r"assert\s*\(",
+    r"SQLITE_MAX",
+    r"INT_MAX",
+    r"UINT_MAX",
+    r"free\s*\(",
+    r"NULL\s*==",
+    r"==\s*NULL",
+]
+LOW_RISK_PATTERNS = [
+    r"for\s*\(",
+    r"while\s*\(",
+    r"switch\s*\(",
+    r"goto\s+",
+    r"return\s+-",
 ]
 
+SELECTOR_SYSTEM = """
+你是一名 C 语言静态分析专家。用户会给你一份 C 源文件的函数列表（函数名和行号），
+以及已经分析过的行范围（需要跳过）。
+
+请从未分析过的函数中，选出最值得深入检查的 6 个函数，标准是：
+1. 函数名暗示复杂逻辑（parse、compile、exec、eval、alloc、grow、expand、read、write）
+2. 函数名暗示边界处理（limit、max、min、check、valid、safe）
+3. 函数名暗示错误处理（error、fail、abort、panic、recover）
+4. 与内存、字符串、数值转换相关
+5. 优先选从未分析过的区域
+
+返回 JSON 数组，每个元素是：
+{"func_name": "函数名", "start_line": 行号, "reason": "选择原因（一句话）"}
+"""
+
 STATIC_ANALYSIS_SYSTEM = """
-你是一名资深 C 语言安全分析专家，擅长发现代码中的潜在缺陷和边界问题。
+你是一名资深 C 语言安全分析专家。分析给定的代码片段，找出潜在风险点。
 
-用户会给你一段 C 源码片段（来自 sqlite3.c），请你：
-1. 识别代码中的潜在风险点，包括但不限于：
-   - 整数溢出/下溢
-   - 除零风险
-   - 空指针解引用
-   - 缓冲区溢出
-   - 内存泄漏
-   - 未处理的错误返回值
-   - 边界条件处理不当
-2. 对每个风险点，描述触发条件和可能的行为
-3. 给出针对性的测试建议（具体的输入值或场景）
+关注：整数溢出、除零、空指针、缓冲区溢出、内存泄漏、
+      未检查返回值、边界条件、类型转换错误、竞态条件。
 
-返回 JSON 数组，每个元素是一个风险点：
+返回 JSON 数组：
 [
   {
     "risk_id": "R01",
-    "location": "函数名或代码位置描述",
-    "risk_type": "风险类型（如：整数溢出、除零、空指针等）",
-    "description": "风险描述",
-    "trigger_condition": "触发这个风险需要什么输入或条件",
-    "test_suggestion": "建议的测试用例描述（具体 SQL 语句或操作）",
-    "severity": "high / medium / low"
+    "location": "函数名或描述",
+    "risk_type": "风险类型",
+    "description": "具体描述",
+    "trigger_condition": "触发条件",
+    "test_suggestion": "具体测试建议（SQL语句或操作）",
+    "severity": "high/medium/low"
   }
 ]
-
-如果代码片段中没有明显风险，返回空数组 []。
+没有风险则返回 []。
 """
 
 SUMMARY_SYSTEM = """
-你是一名软件测试专家。用户会给你多个代码片段的静态分析结果（风险点列表），
-请综合所有结果，提炼出最值得测试的 5~8 个核心风险点，去掉重复的，按严重程度排序。
-
-返回 JSON 数组，格式与输入相同：
-[
-  {
-    "risk_id": "R01",
-    "location": "...",
-    "risk_type": "...",
-    "description": "...",
-    "trigger_condition": "...",
-    "test_suggestion": "具体的 SQL 语句或测试场景",
-    "severity": "high / medium / low"
-  }
-]
+综合多个代码片段的静态分析结果，提炼 5~8 个最重要的核心风险点，去重排序。
+返回与输入相同格式的 JSON 数组。
 """
 
 
@@ -106,9 +114,9 @@ class RiskPoint:
         return (
             f"[{self.risk_id}] {self.risk_type} @ {self.location}\n"
             f"  描述: {self.description}\n"
-            f"  触发条件: {self.trigger_condition}\n"
-            f"  测试建议: {self.test_suggestion}\n"
-            f"  严重程度: {self.severity}"
+            f"  触发: {self.trigger_condition}\n"
+            f"  建议: {self.test_suggestion}\n"
+            f"  严重: {self.severity}"
         )
 
 
@@ -118,15 +126,14 @@ class StaticAnalysisReport:
     total_lines: int
     analyzed_snippets: int
     risk_points: list[RiskPoint] = field(default_factory=list)
+    is_incremental: bool = False   # 是否为增量分析
 
     def summary_for_planner(self) -> str:
-        """生成给 PlannerAgent 看的摘要文本"""
         if not self.risk_points:
             return "静态分析未发现明显风险点。"
+        prefix = "（增量分析）" if self.is_incremental else ""
         lines = [
-            f"静态分析发现 {len(self.risk_points)} 个潜在风险点"
-            f"（分析了 {self.analyzed_snippets} 个代码片段，共 {self.total_lines} 行源码）：",
-            ""
+            f"{prefix}静态分析发现 {len(self.risk_points)} 个潜在风险点：", ""
         ]
         for rp in self.risk_points:
             lines.append(rp.to_prompt_text())
@@ -135,61 +142,108 @@ class StaticAnalysisReport:
 
 
 class StaticAnalysisAgent:
-    """
-    Agent 0.5：静态分析智能体。
-    在 PlannerAgent 之前运行，分析源码风险，增强测试用例针对性。
-    """
-
     def __init__(self, workdir: str = "."):
         self._llm = LLMClient()
         self._workdir = workdir
+        self._history_path = os.path.join(workdir, HISTORY_FILE)
+        self._history = self._load_history()
+
+    # ── 历史管理 ──────────────────────────────────────────────────
+
+    def _load_history(self) -> dict:
+        """加载历史分析记录"""
+        if os.path.exists(self._history_path):
+            try:
+                with open(self._history_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                analyzed = data.get("analyzed_ranges", [])
+                print(f"[StaticAnalysisAgent] 载入历史记录：已分析 {len(analyzed)} 个代码片段")
+                return data
+            except Exception:
+                pass
+        return {"analyzed_ranges": [], "analyzed_functions": []}
+
+    def _save_history(self, new_ranges: list[tuple[int, int]], new_funcs: list[str]):
+        """保存本次分析的行范围和函数名"""
+        existing_ranges = self._history.get("analyzed_ranges", [])
+        existing_funcs = self._history.get("analyzed_functions", [])
+        existing_ranges.extend(new_ranges)
+        existing_funcs.extend(new_funcs)
+        # 去重
+        unique_ranges = list({(s, e) for s, e in existing_ranges})
+        unique_funcs = list(set(existing_funcs))
+        self._history = {
+            "analyzed_ranges": unique_ranges,
+            "analyzed_functions": unique_funcs,
+            "total_sessions": self._history.get("total_sessions", 0) + 1,
+        }
+        with open(self._history_path, "w", encoding="utf-8") as f:
+            json.dump(self._history, f, ensure_ascii=False, indent=2)
+        print(f"[StaticAnalysisAgent] 历史已更新：累计分析 {len(unique_ranges)} 个片段")
+
+    def _is_already_analyzed(self, start: int, end: int) -> bool:
+        """检查某行范围是否已分析过（重叠超过50%则跳过）"""
+        for s, e in self._history.get("analyzed_ranges", []):
+            overlap = min(end, e) - max(start, s)
+            span = end - start
+            if span > 0 and overlap / span > 0.5:
+                return True
+        return False
+
+    def _analyzed_functions(self) -> set[str]:
+        return set(self._history.get("analyzed_functions", []))
+
+    # ── 主入口 ────────────────────────────────────────────────────
 
     def analyze(self, framework: dict) -> StaticAnalysisReport:
-        """
-        分析被测项目源码，返回静态分析报告。
-        framework 中需要有 source_files 或可下载的源码。
-        """
         project_name = framework.get("project_name", "")
         print(f"\n[StaticAnalysisAgent] 开始静态分析: {project_name}")
 
-        # 获取源码文件路径
         src_path = self._get_source_file(framework)
-
         if not src_path:
-            print("[StaticAnalysisAgent] ⚠️  无法获取源码，跳过静态分析。")
-            return StaticAnalysisReport(
-                source_file="",
-                total_lines=0,
-                analyzed_snippets=0,
-                risk_points=[],
-            )
+            print("[StaticAnalysisAgent] ⚠️  无法获取源码，跳过。")
+            return StaticAnalysisReport("", 0, 0)
 
-        print(f"[StaticAnalysisAgent] 源码文件: {src_path}")
-
-        # 读取源码
         with open(src_path, "r", encoding="utf-8", errors="ignore") as f:
             source_lines = f.readlines()
 
         total_lines = len(source_lines)
-        print(f"[StaticAnalysisAgent] 源码共 {total_lines} 行")
+        print(f"[StaticAnalysisAgent] 源码共 {total_lines:,} 行")
 
-        # 提取高风险代码片段
-        snippets = self._extract_risky_snippets(source_lines)
-        print(f"[StaticAnalysisAgent] 提取到 {len(snippets)} 个高风险代码片段，开始逐一分析...")
+        # 提取函数列表
+        functions = self._extract_functions(source_lines)
+        print(f"[StaticAnalysisAgent] 识别到 {len(functions)} 个函数")
+
+        # 三策略选片段
+        snippets = self._select_snippets(source_lines, functions)
+        print(f"[StaticAnalysisAgent] 本次分析 {len(snippets)} 个片段（跳过历史已分析片段）")
+
+        if not snippets:
+            print("[StaticAnalysisAgent] 所有片段均已在历史中分析过，尝试随机选取新片段...")
+            snippets = self._random_sample(source_lines, n=4)
 
         # 逐片段分析
         all_risks = []
-        for i, (label, snippet) in enumerate(snippets):
-            print(f"  [分析 {i+1}/{len(snippets)}] {label}")
+        analyzed_ranges = []
+        analyzed_funcs = []
+
+        for i, (label, snippet, start, end, func_name) in enumerate(snippets):
+            print(f"  [{i+1}/{len(snippets)}] {label}")
             risks = self._analyze_snippet(label, snippet)
             all_risks.extend(risks)
+            analyzed_ranges.append((start, end))
+            if func_name:
+                analyzed_funcs.append(func_name)
 
-        print(f"[StaticAnalysisAgent] 原始风险点共 {len(all_risks)} 个，正在综合提炼...")
+        # 保存历史
+        self._save_history(analyzed_ranges, analyzed_funcs)
 
-        # 综合提炼，去重排序
+        # 综合提炼
+        print(f"[StaticAnalysisAgent] 原始风险点 {len(all_risks)} 个，综合提炼中...")
         final_risks = self._summarize_risks(all_risks)
-        print(f"[StaticAnalysisAgent] ✅ 最终提炼出 {len(final_risks)} 个核心风险点")
 
+        is_incremental = len(self._history.get("analyzed_ranges", [])) > len(snippets)
+        print(f"[StaticAnalysisAgent] ✅ 最终 {len(final_risks)} 个核心风险点")
         for rp in final_risks:
             icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(rp.severity, "⚪")
             print(f"  {icon} [{rp.risk_id}] {rp.risk_type} - {rp.description[:60]}")
@@ -199,135 +253,182 @@ class StaticAnalysisAgent:
             total_lines=total_lines,
             analyzed_snippets=len(snippets),
             risk_points=final_risks,
+            is_incremental=is_incremental,
         )
 
-    # ──────────────────────────────────────────────────────────
-    # 源码获取
-    # ──────────────────────────────────────────────────────────
+    # ── 函数提取 ──────────────────────────────────────────────────
 
-    def _get_source_file(self, framework: dict) -> str:
-        """获取源码文件路径，如果没有则尝试下载"""
-        # 1. 用 framework 里指定的源文件
-        source_files = framework.get("source_files", [])
-        for sf in source_files:
-            full_path = os.path.join(self._workdir, sf)
-            if os.path.isfile(full_path):
-                return full_path
-
-        # 2. sqlite3 特殊处理：从项目目录找或下载
-        project_name = framework.get("project_name", "").lower()
-        if "sqlite" in project_name:
-            return self._get_sqlite3_source()
-
-        return ""
-
-    def _get_sqlite3_source(self) -> str:
-        """获取 sqlite3.c 源码文件"""
-        # 先找本地
-        candidates = [
-            os.path.join(self._workdir, SQLITE3_SRC_FILE),
-            os.path.join(self._workdir, SQLITE3_SRC_DIR, SQLITE3_SRC_FILE),
-            os.path.join(self._workdir, SQLITE3_SRC_DIR, "sqlite-amalgamation-3460100", SQLITE3_SRC_FILE),
-        ]
-        for p in candidates:
-            if os.path.isfile(p):
-                print(f"[StaticAnalysisAgent] 找到本地源码: {p}")
-                return p
-
-        # 下载
-        print(f"[StaticAnalysisAgent] 本地无源码，尝试从 sqlite.org 下载...")
-        confirm = input("[StaticAnalysisAgent] 是否下载 sqlite3.c 源码用于静态分析？(y/n): ").strip().lower()
-        if confirm != "y":
-            print("[StaticAnalysisAgent] 用户跳过，静态分析将不使用源码。")
-            return ""
-
-        import zipfile
-        import urllib.request
-
-        zip_path = os.path.join(self._workdir, "sqlite3_src.zip")
-        extract_dir = os.path.join(self._workdir, SQLITE3_SRC_DIR)
-
-        try:
-            print(f"[StaticAnalysisAgent] 下载中: {SQLITE3_SRC_URL}")
-            urllib.request.urlretrieve(SQLITE3_SRC_URL, zip_path)
-
-            os.makedirs(extract_dir, exist_ok=True)
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extractall(extract_dir)
-            os.remove(zip_path)
-
-            # 找 sqlite3.c
-            for root, dirs, files in os.walk(extract_dir):
-                if SQLITE3_SRC_FILE in files:
-                    found = os.path.join(root, SQLITE3_SRC_FILE)
-                    print(f"[StaticAnalysisAgent] ✅ 源码下载完成: {found}")
-                    return found
-
-        except Exception as e:
-            print(f"[StaticAnalysisAgent] 下载失败: {e}")
-
-        return ""
-
-    # ──────────────────────────────────────────────────────────
-    # 代码片段提取
-    # ──────────────────────────────────────────────────────────
-
-    def _extract_risky_snippets(
-        self, lines: list[str], max_snippets: int = 6, context: int = 40
-    ) -> list[tuple[str, str]]:
+    def _extract_functions(self, lines: list[str]) -> list[dict]:
         """
-        在源码中找高风险行，提取其上下文片段。
-        返回 [(标签, 代码文本), ...]
-        max_snippets：最多分析几个片段（控制 API 费用）
-        context：每个片段上下各取多少行
+        从 C 源码中提取函数定义列表。
+        返回 [{"name": str, "line": int}, ...]
         """
-        hit_lines = []  # [(行号, 匹配模式)]
-
+        functions = []
+        # 匹配 C 函数定义：返回类型 函数名(参数) {
+        func_pattern = re.compile(
+            r'^(?:static\s+|SQLITE_PRIVATE\s+|SQLITE_API\s+)?'
+            r'(?:(?:unsigned|signed|const|volatile)\s+)?'
+            r'\w[\w\s\*]*\s+'
+            r'(\w+)\s*\([^;]*\)\s*\{',
+            re.MULTILINE
+        )
         for i, line in enumerate(lines):
-            for pattern in HIGH_RISK_PATTERNS:
+            m = func_pattern.match(line.strip())
+            if m:
+                func_name = m.group(1)
+                # 过滤掉宏、类型定义等
+                if func_name not in ('if', 'for', 'while', 'switch', 'else'):
+                    functions.append({"name": func_name, "line": i + 1})
+        return functions
+
+    # ── 三策略选片段 ──────────────────────────────────────────────
+
+    def _select_snippets(
+        self, lines: list[str], functions: list[dict], max_total: int = 7
+    ) -> list[tuple]:
+        """
+        三策略选取代码片段：
+        策略1：关键词命中（高→中→低优先级）
+        策略2：LLM 推荐函数
+        策略3：补充未覆盖区域
+        返回 [(label, snippet_text, start, end, func_name), ...]
+        """
+        selected = []
+        seen_starts = set()
+
+        # ── 策略1：关键词命中，按优先级 ──────────────────────────
+        keyword_hits = self._keyword_scan(lines)
+        for start, end, label, pattern_level in keyword_hits:
+            if len(selected) >= max_total // 2:
+                break
+            if self._is_already_analyzed(start, end):
+                continue
+            if start in seen_starts:
+                continue
+            snippet = "".join(lines[start:end])
+            selected.append((label, snippet, start, end, None))
+            seen_starts.add(start)
+
+        # ── 策略2：LLM 推荐函数 ──────────────────────────────────
+        llm_funcs = self._llm_recommend_functions(functions)
+        for rec in llm_funcs:
+            if len(selected) >= max_total:
+                break
+            func_line = rec.get("start_line", 1) - 1
+            start = max(0, func_line)
+            end = min(len(lines), func_line + 80)
+            if self._is_already_analyzed(start, end):
+                continue
+            if start in seen_starts:
+                continue
+            snippet = "".join(lines[start:end])
+            label = f"函数 {rec.get('func_name')}（LLM推荐：{rec.get('reason', '')}）"
+            selected.append((label, snippet, start, end, rec.get("func_name")))
+            seen_starts.add(start)
+
+        # ── 策略3：随机补充未覆盖区域 ────────────────────────────
+        if len(selected) < max_total:
+            extra = self._random_sample(lines, n=max_total - len(selected), exclude_starts=seen_starts)
+            selected.extend(extra)
+
+        return selected[:max_total]
+
+    def _keyword_scan(self, lines: list[str]) -> list[tuple]:
+        """
+        关键词扫描，返回 [(start, end, label, level), ...]
+        按优先级排序：高风险优先
+        """
+        hits = []
+        context = 50
+
+        all_patterns = (
+            [(p, "high") for p in HIGH_RISK_PATTERNS] +
+            [(p, "medium") for p in MED_RISK_PATTERNS] +
+            [(p, "low") for p in LOW_RISK_PATTERNS]
+        )
+
+        seen_centers = set()
+        for i, line in enumerate(lines):
+            for pattern, level in all_patterns:
                 if re.search(pattern, line, re.IGNORECASE):
-                    hit_lines.append((i, pattern))
+                    # 聚合相近行
+                    center = i // context
+                    if center in seen_centers:
+                        continue
+                    seen_centers.add(center)
+                    start = max(0, i - context // 2)
+                    end = min(len(lines), i + context // 2)
+                    label = f"行 {start+1}~{end}（关键词: {pattern}，风险级别: {level}）"
+                    hits.append((start, end, label, level))
                     break
 
-        if not hit_lines:
+        # 高风险优先排序
+        priority = {"high": 0, "medium": 1, "low": 2}
+        hits.sort(key=lambda x: priority.get(x[3], 3))
+        return hits
+
+    def _llm_recommend_functions(self, functions: list[dict]) -> list[dict]:
+        """让 LLM 从函数列表中推荐最值得分析的函数"""
+        if not functions:
             return []
 
-        # 去重聚合：相邻行合并成一个片段，均匀采样
-        merged = self._merge_nearby_hits(hit_lines, gap=context)
+        analyzed = self._analyzed_functions()
 
-        # 均匀采样 max_snippets 个
-        step = max(1, len(merged) // max_snippets)
-        sampled = merged[::step][:max_snippets]
+        # 过滤掉已分析的，采样发给 LLM（函数太多只发部分）
+        unanalyzed = [f for f in functions if f["name"] not in analyzed]
+        sample = random.sample(unanalyzed, min(80, len(unanalyzed)))
 
-        snippets = []
-        for center_line, pattern in sampled:
-            start = max(0, center_line - context)
-            end = min(len(lines), center_line + context)
-            snippet_text = "".join(lines[start:end])
-            label = f"行 {start+1}~{end}（触发模式: {pattern}）"
-            snippets.append((label, snippet_text))
+        func_list = "\n".join(f"  {f['name']} (行{f['line']})" for f in sample)
+        already = ", ".join(list(analyzed)[:20]) if analyzed else "无"
 
-        return snippets
+        user_msg = (
+            f"以下是 sqlite3.c 中的部分函数列表（共 {len(functions)} 个函数）：\n\n"
+            f"{func_list}\n\n"
+            f"已分析过的函数（请跳过）：{already}\n\n"
+            f"请推荐 4~6 个最值得深入检查的函数。"
+        )
 
-    def _merge_nearby_hits(
-        self, hits: list[tuple[int, str]], gap: int
-    ) -> list[tuple[int, str]]:
-        """把距离小于 gap 的命中行合并，取中点"""
-        if not hits:
+        try:
+            result = self._llm.chat_json(SELECTOR_SYSTEM, user_msg)
+            if isinstance(result, list):
+                print(f"  [StaticAnalysisAgent] LLM 推荐了 {len(result)} 个函数")
+                return result
+        except Exception as e:
+            print(f"  [StaticAnalysisAgent] LLM 推荐失败: {e}")
+        return []
+
+    def _random_sample(
+        self, lines: list[str],
+        n: int = 3,
+        context: int = 60,
+        exclude_starts: set = None
+    ) -> list[tuple]:
+        """随机采样未分析过的代码片段"""
+        exclude_starts = exclude_starts or set()
+        total = len(lines)
+        if total < context:
             return []
-        merged = [hits[0]]
-        for line_no, pattern in hits[1:]:
-            if line_no - merged[-1][0] < gap:
-                continue  # 太近，跳过
-            merged.append((line_no, pattern))
-        return merged
 
-    # ──────────────────────────────────────────────────────────
-    # LLM 分析
-    # ──────────────────────────────────────────────────────────
+        results = []
+        attempts = 0
+        while len(results) < n and attempts < 50:
+            attempts += 1
+            start = random.randint(0, total - context)
+            end = min(total, start + context)
+            if self._is_already_analyzed(start, end):
+                continue
+            if start in exclude_starts:
+                continue
+            snippet = "".join(lines[start:end])
+            label = f"行 {start+1}~{end}（随机采样）"
+            results.append((label, snippet, start, end, None))
+            exclude_starts.add(start)
+
+        return results
+
+    # ── LLM 分析 ──────────────────────────────────────────────────
 
     def _analyze_snippet(self, label: str, snippet: str) -> list[RiskPoint]:
-        """让 LLM 分析一个代码片段，返回风险点列表"""
         user_msg = f"代码位置：{label}\n\n```c\n{snippet[:3000]}\n```"
         try:
             raw = self._llm.chat_json(STATIC_ANALYSIS_SYSTEM, user_msg)
@@ -350,21 +451,15 @@ class StaticAnalysisAgent:
             return []
 
     def _summarize_risks(self, all_risks: list[RiskPoint]) -> list[RiskPoint]:
-        """综合所有片段的风险点，提炼核心结果"""
         if not all_risks:
             return []
-
         if len(all_risks) <= 5:
-            # 数量少就直接用
             for i, rp in enumerate(all_risks):
                 rp.risk_id = f"R{i+1:02d}"
             return all_risks
 
-        # 数量多则让 LLM 综合提炼
         all_dicts = [rp.to_dict() for rp in all_risks]
-        import json
         user_msg = f"以下是从多个代码片段分析得到的风险点：\n\n{json.dumps(all_dicts, ensure_ascii=False, indent=2)}"
-
         try:
             summarized = self._llm.chat_json(SUMMARY_SYSTEM, user_msg)
             if not isinstance(summarized, list):
@@ -384,3 +479,51 @@ class StaticAnalysisAgent:
         except Exception as e:
             print(f"[StaticAnalysisAgent] 综合提炼失败: {e}")
             return all_risks[:8]
+
+    # ── 源码获取 ──────────────────────────────────────────────────
+
+    def _get_source_file(self, framework: dict) -> str:
+        for sf in framework.get("source_files", []):
+            full = os.path.join(self._workdir, sf)
+            if os.path.isfile(full):
+                return full
+
+        project_name = framework.get("project_name", "").lower()
+        if "sqlite" in project_name:
+            return self._get_sqlite3_source()
+        return ""
+
+    def _get_sqlite3_source(self) -> str:
+        candidates = [
+            os.path.join(self._workdir, SQLITE3_SRC_FILE),
+            os.path.join(self._workdir, SQLITE3_SRC_DIR, SQLITE3_SRC_FILE),
+            os.path.join(self._workdir, SQLITE3_SRC_DIR,
+                         "sqlite-amalgamation-3460100", SQLITE3_SRC_FILE),
+        ]
+        for p in candidates:
+            if os.path.isfile(p):
+                print(f"[StaticAnalysisAgent] 找到本地源码: {p}")
+                return p
+
+        print("[StaticAnalysisAgent] 本地无源码，尝试从 sqlite.org 下载...")
+        confirm = input("[StaticAnalysisAgent] 是否下载 sqlite3.c？(y/n): ").strip().lower()
+        if confirm != "y":
+            return ""
+
+        zip_path = os.path.join(self._workdir, "sqlite3_src.zip")
+        extract_dir = os.path.join(self._workdir, SQLITE3_SRC_DIR)
+        try:
+            print(f"[StaticAnalysisAgent] 下载中: {SQLITE3_SRC_URL}")
+            urllib.request.urlretrieve(SQLITE3_SRC_URL, zip_path)
+            os.makedirs(extract_dir, exist_ok=True)
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(extract_dir)
+            os.remove(zip_path)
+            for root, dirs, files in os.walk(extract_dir):
+                if SQLITE3_SRC_FILE in files:
+                    found = os.path.join(root, SQLITE3_SRC_FILE)
+                    print(f"[StaticAnalysisAgent] ✅ 源码: {found}")
+                    return found
+        except Exception as e:
+            print(f"[StaticAnalysisAgent] 下载失败: {e}")
+        return ""
