@@ -201,17 +201,29 @@ def main():
     else:
         print("\n[Main] ✅ 多轮精化后未确认程序缺陷（失败均为测试设计问题）。")
 
-    # ── Step 7：输出报告 ─────────────────────────────────────────
+    # ── Step 7：合并报告 + 输出 ──────────────────────────────────
+    from core.reporter import merge_reports, append_static_analysis
+    from core.reporter import append_refined_results, append_overall_summary
+
+    # 用精化结果替换原始失败结果，生成最终合并报告
+    if all_refined_reports:
+        print("\n[Main] 合并精化结果到最终报告...")
+        final_report = merge_reports(report, all_refined_reports)
+        print(f"[Main] 合并后：{final_report.passed} 通过 / "
+              f"{final_report.failed} 失败 / {final_report.errors} 错误")
+    else:
+        final_report = report
+
     reporter = Reporter()
-    json_path, md_path = reporter.save(report)
-    from core.reporter import append_static_analysis, append_refined_results, append_overall_summary
+    json_path, md_path = reporter.save(final_report)
     append_static_analysis(md_path, static_report)
 
-    for i, (rpt, tasks) in enumerate(zip(all_refined_reports, [all_refined_tasks])):
-        append_refined_results(md_path, rpt, tasks, round_num=i+1,
-                               confirmed_bugs=confirmed_bugs)
+    # 精化过程作为附录追加
+    for i, rpt in enumerate(all_refined_reports):
+        append_refined_results(md_path, rpt, all_refined_tasks,
+                               round_num=i+1, confirmed_bugs=confirmed_bugs)
 
-    append_overall_summary(md_path, report, static_report,
+    append_overall_summary(md_path, final_report, static_report,
                            confirmed_bugs=confirmed_bugs)
 
     print(f"\n[Main] 报告已生成：")
