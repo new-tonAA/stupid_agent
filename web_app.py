@@ -4,18 +4,23 @@
 
 import os, sys, json, glob, threading, queue, time, importlib
 from datetime import datetime
+from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, render_template_string, request, jsonify
 from flask_socketio import SocketIO, emit
 
+from core.terminal import TerminalExecutor
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'ta-secret-2024'
-socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins='*')
+socketio = SocketIO(app, async_mode='threading', cors_allowed_origins='*')
 
 test_running = False
+terminal_executor: Optional[TerminalExecutor] = None
 test_thread = None
+active_sid: Optional[str] = None
 
 DEFAULT_FRAMEWORK = {
     "project_name": "SQLite3 Database Engine",
@@ -189,6 +194,21 @@ body{
   transition:opacity .2s;
 }
 #sidebar.collapsed .sb-section-label{opacity:0}
+.sb-new{
+  margin:6px 8px 8px;
+  width:calc(100% - 16px);
+  border:1px solid rgba(120,90,54,0.22);
+  background:#e7d8bd;
+  color:#3f2d1a;
+  border-radius:7px;
+  font-size:11px;
+  font-weight:600;
+  padding:6px 8px;
+  cursor:pointer;
+  transition:all .15s;
+}
+.sb-new:hover{background:#dfccae}
+#sidebar.collapsed .sb-new{opacity:0;pointer-events:none}
 
 .hist-item{
   padding:8px 10px;border-radius:8px;cursor:pointer;
@@ -390,6 +410,39 @@ body{
 }
 .log-line.dim{color:var(--t3)}
 .log-line.empty{color:var(--t3);font-style:italic}
+.terminal-row{
+  display:none;
+  gap:8px;
+  padding:8px 12px;
+  border-top:1px solid var(--b1);
+  background:var(--surface);
+}
+.terminal-cmd{
+  flex:1;
+  background:var(--raised);
+  border:1px solid var(--b1);
+  border-radius:7px;
+  color:var(--t0);
+  font-family:'JetBrains Mono',monospace;
+  font-size:12px;
+  padding:7px 10px;
+  outline:none;
+}
+.terminal-cmd:focus{
+  border-color:rgba(159,99,35,0.45);
+  box-shadow:0 0 0 2px rgba(159,99,35,0.12);
+}
+.terminal-send{
+  border:1px solid rgba(120,90,54,0.24);
+  background:#e7d8bd;
+  color:#3f2d1a;
+  border-radius:7px;
+  font-size:11px;
+  font-weight:600;
+  padding:0 12px;
+  cursor:pointer;
+}
+.terminal-send:disabled{opacity:.55;cursor:not-allowed}
 
 /* Progress */
 #prog-wrap{
@@ -574,6 +627,7 @@ body{
 
   <div class="sb-body">
     <div class="sb-section-label">History</div>
+    <button class="sb-new" onclick="newTestSession()">+ New Test</button>
     <div id="hist-list"><div style="font-size:11px;color:var(--t3);padding:8px">Loading...</div></div>
   </div>
 
@@ -597,7 +651,7 @@ body{
     </div>
 
     <div class="cov-hm-wrap">
-      <div class="cov-hm-title">Line Coverage Heatmap (GitHub style)</div>
+      <div class="cov-hm-title">Tested Lines of Code</div>
       <div class="cov-file-row">
         <span class="cov-label">File</span>
         <select id="cov-file" class="cov-file-sel" onchange="onCoverageFileChange()"></select>
@@ -620,6 +674,7 @@ body{
   <!-- TOPBAR -->
   <header class="topbar">
     <div class="topbar-sub" id="tb-time">-</div>
+    <div class="topbar-sub" id="stage-time" style="margin-left:10px">Stage: -</div>
     <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
       <button class="btn-stop" id="btn-stop" onclick="stopTest()">Stop</button>
       <div class="badge idle" id="badge">
@@ -727,16 +782,251 @@ const io_socket = io();
 let running = false, activeHistIdx = -1;
 let coverageFiles = [];
 let activeCoverageFile = '';
+let runningHistEl = null;
+let pageInitialized = false;
+let restoredHistoryPath = '';
+let persistReady = false;
+let restoredHistoryKey = '';
+let restoredRunningHistory = null;
+let uiSaveTimer = null;
+let logSaveTimer = null;
+let pendingLogs = [];
+let logsFlushTimer = null;
+let liveLogEntries = [];
+let currentLogView = 'live'; // 'live' | 'history'
+
+const UI_STATE_KEY = 'stupid_agent_ui_state_v1';
+const API_KEY_SESSION_KEY = 'stupid_agent_api_key_session_v1';
+const LOG_SNAPSHOT_KEY = 'stupid_agent_log_snapshot_v1';
+const MAX_SAVED_LOGS = 600;
+const MAX_SAVED_LOG_CHARS = 120000;
+const MAX_LIVE_LOG_ENTRIES = 4000;
+
+function collectLogsForSaveLimited() {
+  const nodes = Array.from(document.querySelectorAll('#log-scroll .log-line'))
+    .filter(n => !n.classList.contains('empty'))
+    .slice(-MAX_SAVED_LOGS);
+  const out = [];
+  let total = 0;
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const t = nodes[i].textContent || '';
+    const tp = nodes[i].dataset.type || '';
+    if (total + t.length > MAX_SAVED_LOG_CHARS) break;
+    out.push({ text: t, type: tp });
+    total += t.length;
+  }
+  out.reverse();
+  return out;
+}
+
+function saveLogSnapshot() {
+  if (!persistReady) return;
+  if (logSaveTimer) return;
+  const delay = running ? 1800 : 400;
+  logSaveTimer = setTimeout(() => {
+    logSaveTimer = null;
+    try {
+      localStorage.setItem(LOG_SNAPSHOT_KEY, JSON.stringify(collectLogsForSaveLimited()));
+    } catch (_) {
+      try { localStorage.removeItem(LOG_SNAPSHOT_KEY); } catch (__){}
+    }
+  }, delay);
+}
+
+function restoreLogSnapshot() {
+  try {
+    const raw = localStorage.getItem(LOG_SNAPSHOT_KEY);
+    if (!raw) return false;
+    const logs = JSON.parse(raw);
+    if (!Array.isArray(logs) || !logs.length) return false;
+    liveLogEntries = logs.map(item => ({
+      text: item?.text || '',
+      type: item?.type || 'info',
+    }));
+    const logScroll = document.getElementById('log-scroll');
+    logScroll.innerHTML = '';
+    appendLogs(liveLogEntries, false);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function saveUiState() {
+  if (!persistReady) return;
+  if (uiSaveTimer) return;
+  const delay = running ? 1200 : 250;
+  uiSaveTimer = setTimeout(() => {
+    uiSaveTimer = null;
+    saveUiStateNow();
+  }, delay);
+}
+
+function saveUiStateNow() {
+  if (!persistReady) return;
+  const providerEl = document.getElementById('provider');
+  const modelEl = document.getElementById('model-sel');
+  const promptEl = document.getElementById('prompt');
+  const badgeEl = document.getElementById('badge');
+  const badgeTextEl = document.getElementById('badge-txt');
+  const progWrap = document.getElementById('prog-wrap');
+  const progLbl = document.getElementById('prog-lbl');
+  const rptName = document.getElementById('rpt-name');
+  const stopBtn = document.getElementById('btn-stop');
+  const runBtn = document.getElementById('btn-run');
+  const activeEl = document.querySelector('.hist-item.active');
+  const runningEl = document.querySelector('.hist-item[data-temp="running"]');
+  const runningName = runningEl?.querySelector('.hist-name')?.textContent || '';
+  const runningMeta = runningEl?.querySelector('.hist-meta')?.textContent || '';
+
+  const badgeState = Array.from(badgeEl.classList).find(c =>
+    ['idle', 'running', 'done', 'error'].includes(c)
+  ) || 'idle';
+
+  const state = {
+    running,
+    logView: currentLogView,
+    provider: providerEl ? providerEl.value : '',
+    model: modelEl ? modelEl.value : '',
+    prompt: promptEl ? promptEl.value : '',
+    badgeState,
+    badgeText: badgeTextEl ? badgeTextEl.textContent : 'Idle',
+    progressVisible: progWrap ? progWrap.style.display !== 'none' : false,
+    progress: {
+      label: progLbl ? progLbl.textContent : '',
+      pct: document.getElementById('prog-pct')?.textContent || '0%',
+      barWidth: document.getElementById('prog-bar')?.style.width || '0%',
+      pass: document.getElementById('s-pass')?.textContent || '0',
+      fail: document.getElementById('s-fail')?.textContent || '0',
+      total: document.getElementById('s-total')?.textContent || '0',
+    },
+    terminalInteractive: running,
+    runDisabled: runBtn ? runBtn.disabled : false,
+    stopShown: stopBtn ? stopBtn.classList.contains('show') : false,
+    activeHistIdx,
+    activeHistoryPath: activeEl?.dataset?.path || '',
+    activeHistoryKey: activeEl
+      ? (activeEl.dataset.temp === 'running' ? 'running' : (activeEl.dataset.path || ''))
+      : '',
+    runningHistory: runningEl ? { name: runningName, meta: runningMeta } : null,
+    activeCoverageFile,
+    reportPath: rptName && rptName.textContent
+      ? ('output/' + rptName.textContent + '.md')
+      : '',
+  };
+  try {
+    localStorage.setItem(UI_STATE_KEY, JSON.stringify(state));
+  } catch (_) {}
+}
+
+function saveApiKeySession() {
+  if (!persistReady) return;
+  const apiKey = document.getElementById('api-key')?.value || '';
+  try {
+    sessionStorage.setItem(API_KEY_SESSION_KEY, apiKey);
+  } catch (_) {}
+}
+
+function restoreUiState() {
+  let state = null;
+  try {
+    const raw = localStorage.getItem(UI_STATE_KEY);
+    if (raw) state = JSON.parse(raw);
+  } catch (_) {}
+  if (!state) return false;
+
+  const providerEl = document.getElementById('provider');
+  const modelEl = document.getElementById('model-sel');
+  const promptEl = document.getElementById('prompt');
+  const apiKeyEl = document.getElementById('api-key');
+
+  if (providerEl && state.provider) providerEl.value = state.provider;
+  onProvider(state.model || '', true);
+  if (promptEl && typeof state.prompt === 'string') promptEl.value = state.prompt;
+
+  try {
+    const apiKey = sessionStorage.getItem(API_KEY_SESSION_KEY);
+    if (apiKeyEl && apiKey) apiKeyEl.value = apiKey;
+  } catch (_) {}
+
+  running = !!state.running;
+  // If a run is still active, always recover to live log view.
+  currentLogView = running ? 'live' : (state.logView === 'history' ? 'history' : 'live');
+  activeHistIdx = Number.isInteger(state.activeHistIdx) ? state.activeHistIdx : -1;
+  activeCoverageFile = state.activeCoverageFile || '';
+  restoredHistoryPath = state.activeHistoryPath || '';
+  restoredHistoryKey = state.activeHistoryKey || '';
+  restoredRunningHistory = state.runningHistory || null;
+
+  const logRestored = restoreLogSnapshot();
+  if (!logRestored) {
+    document.getElementById('log-scroll').innerHTML = '<div class="log-line empty">Waiting to start test...</div>';
+  }
+
+  setStatus(state.badgeState || (running ? 'running' : 'idle'), state.badgeText || (running ? 'Running' : 'Idle'));
+
+  const progWrap = document.getElementById('prog-wrap');
+  progWrap.style.display = state.progressVisible ? 'block' : 'none';
+  if (state.progress) {
+    document.getElementById('prog-lbl').textContent = state.progress.label || 'Initializing...';
+    document.getElementById('prog-pct').textContent = state.progress.pct || '0%';
+    document.getElementById('prog-bar').style.width = state.progress.barWidth || '0%';
+    document.getElementById('s-pass').textContent = state.progress.pass || '0';
+    document.getElementById('s-fail').textContent = state.progress.fail || '0';
+    document.getElementById('s-total').textContent = state.progress.total || '0';
+  }
+
+  document.getElementById('btn-run').disabled = !!state.runDisabled;
+  document.getElementById('btn-stop').classList.toggle('show', !!state.stopShown);
+  setTerminalInteractive(!!state.terminalInteractive && running);
+
+  if (running) {
+    renderLiveLogs();
+    setRptPlaceholder('Test is still running. Waiting for new output...');
+  } else if (state.reportPath) {
+    showReport(state.reportPath);
+  } else {
+    setRptPlaceholder('New test session ready. Configure options and click Run.');
+  }
+  return true;
+}
 
 // Socket events
-io_socket.on('connect', () => { loadHistory(); loadCoverage(); });
+io_socket.on('connect', () => {
+  if (!pageInitialized) {
+    loadHistory();
+    loadCoverage();
+    persistReady = false;
+    const restored = restoreUiState();
+    if (!restored) newTestSession();
+    persistReady = true;
+    saveUiState();
+    pageInitialized = true;
+  }
+});
 
-io_socket.on('log', d => addLog(d.text, d.type || 'info'));
+io_socket.on('stage_timing', d => {
+  if (!d) return;
+  const name = d.name || 'Stage';
+  const sec = typeof d.seconds === 'number' ? d.seconds.toFixed(1) : '-';
+  document.getElementById('stage-time').textContent = `Stage: ${name} (${sec}s)`;
+});
+
+io_socket.on('log', d => enqueueLog(d.text, d.type || 'info'));
+io_socket.on('log_batch', d => {
+  const items = Array.isArray(d?.items) ? d.items : [];
+  if (!items.length) return;
+  enqueueLogBatch(items.map(it => ({
+    text: it?.text || '',
+    type: it?.type || 'info',
+  })));
+});
 
 io_socket.on('progress', d => updateProg(d));
 
 io_socket.on('test_done', d => {
   running = false;
+  setTerminalInteractive(false);
   setStatus(d.success ? 'done' : 'error', d.success ? 'Completed' : 'Failed');
   document.getElementById('btn-run').disabled = false;
   document.getElementById('btn-stop').classList.remove('show');
@@ -744,6 +1034,8 @@ io_socket.on('test_done', d => {
   loadHistory();
   loadCoverage();
   toast(d.success ? 'Test completed' : 'Test finished with errors');
+  if (currentLogView === 'live') renderLiveLogs();
+  saveUiState();
 });
 
 // Test control
@@ -753,6 +1045,10 @@ function startTest() {
   if (!key) { toast('Please enter API key'); return; }
 
   running = true;
+  currentLogView = 'live';
+  liveLogEntries = [];
+  setTerminalInteractive(true);
+  prependRunningHistory();
   clearLog();
   setStatus('running', 'Running');
   document.getElementById('btn-run').disabled = true;
@@ -767,23 +1063,87 @@ function startTest() {
     model: document.getElementById('model-sel').value,
     prompt: document.getElementById('prompt').value.trim(),
   });
+  saveApiKeySession();
+  saveUiState();
 }
 
 function stopTest() {
   io_socket.emit('stop_test');
   toast('Stopping...');
+  saveUiState();
 }
 
 // Logs
-function addLog(text, type) {
+function enqueueLog(text, type) {
+  const item = { text, type };
+  liveLogEntries.push(item);
+  if (liveLogEntries.length > MAX_LIVE_LOG_ENTRIES) {
+    liveLogEntries.splice(0, liveLogEntries.length - MAX_LIVE_LOG_ENTRIES);
+  }
+  saveLogSnapshot();
+  if (currentLogView !== 'live') return;
+  pendingLogs.push(item);
+  if (logsFlushTimer) return;
+  logsFlushTimer = setTimeout(flushQueuedLogs, 70);
+}
+
+function enqueueLogBatch(items) {
+  if (!items || !items.length) return;
+  liveLogEntries.push(...items);
+  if (liveLogEntries.length > MAX_LIVE_LOG_ENTRIES) {
+    liveLogEntries.splice(0, liveLogEntries.length - MAX_LIVE_LOG_ENTRIES);
+  }
+  saveLogSnapshot();
+  if (currentLogView !== 'live') return;
+  pendingLogs.push(...items);
+  if (logsFlushTimer) return;
+  logsFlushTimer = setTimeout(flushQueuedLogs, 70);
+}
+
+function flushQueuedLogs() {
+  if (logsFlushTimer) {
+    clearTimeout(logsFlushTimer);
+    logsFlushTimer = null;
+  }
+  if (!pendingLogs.length) return;
+  const batch = pendingLogs;
+  pendingLogs = [];
+  if (currentLogView !== 'live') return;
+  appendLogs(batch, true);
+}
+
+function renderLiveLogs() {
+  pendingLogs = [];
+  clearLog(false);
+  if (!liveLogEntries.length) {
+    addLog('Waiting to start test...', 'dim');
+    return;
+  }
+  appendLogs(liveLogEntries, false);
+}
+
+function appendLogs(items, shouldPersist) {
   const scr = document.getElementById('log-scroll');
   const ph = scr.querySelector('.log-line.empty');
-  if (ph) ph.remove();
-  const d = document.createElement('div');
-  d.className = 'log-line ' + classOf(text, type);
-  d.textContent = text;
-  scr.appendChild(d);
+  if (ph && items.length) ph.remove();
+  const frag = document.createDocumentFragment();
+  items.forEach(item => {
+    const d = document.createElement('div');
+    d.className = 'log-line ' + classOf(item.text || '', item.type || '');
+    d.dataset.type = item.type || '';
+    d.textContent = item.text || '';
+    frag.appendChild(d);
+  });
+  scr.appendChild(frag);
   scr.scrollTop = scr.scrollHeight;
+  if (shouldPersist) {
+    saveLogSnapshot();
+    if (!running) saveUiState();
+  }
+}
+
+function addLog(text, type) {
+  appendLogs([{ text, type }], true);
 }
 
 function classOf(text, type) {
@@ -797,8 +1157,82 @@ function classOf(text, type) {
   return 'info';
 }
 
-function clearLog() {
+function clearLog(shouldPersist = true) {
   document.getElementById('log-scroll').innerHTML = '';
+  if (shouldPersist) {
+    saveLogSnapshot();
+    saveUiState();
+  }
+}
+
+function setTerminalInteractive(enabled) {
+  const row = document.getElementById('terminal-row');
+  const inp = document.getElementById('terminal-cmd');
+  const btn = document.getElementById('terminal-send');
+  if (!row || !inp || !btn) return;
+  row.style.display = enabled ? 'flex' : 'none';
+  inp.disabled = !enabled;
+  btn.disabled = !enabled;
+  if (!enabled) inp.value = '';
+  saveUiState();
+}
+
+function newTestSession() {
+  running = false;
+  currentLogView = 'live';
+  liveLogEntries = [];
+  activeHistIdx = -1;
+  if (runningHistEl && runningHistEl.parentNode) runningHistEl.remove();
+  runningHistEl = null;
+  document.getElementById('btn-run').disabled = false;
+  document.getElementById('btn-stop').classList.remove('show');
+  document.getElementById('prog-wrap').style.display = 'none';
+  setTerminalInteractive(false);
+  setStatus('idle', 'Idle');
+  document.getElementById('log-scroll').innerHTML = '<div class="log-line empty">Waiting to start test...</div>';
+  try { localStorage.removeItem(LOG_SNAPSHOT_KEY); } catch (_){}
+  setRptPlaceholder('New test session ready. Configure options and click Run.');
+  document.querySelectorAll('.hist-item').forEach(x => x.classList.remove('active'));
+  saveUiState();
+}
+
+function prependRunningHistory() {
+  renderRunningHistoryItem({
+    name: new Date().toLocaleString('zh-CN', {hour12:false}),
+    meta: 'Running...',
+    active: true,
+  });
+  saveUiState();
+}
+
+function renderRunningHistoryItem(opt) {
+  const list = document.getElementById('hist-list');
+  if (!list) return;
+  if (runningHistEl && runningHistEl.parentNode) runningHistEl.remove();
+  const el = document.createElement('div');
+  el.className = 'hist-item' + (opt.active ? ' active' : '');
+  el.dataset.temp = 'running';
+  el.dataset.idx = '-1';
+  el.innerHTML =
+    '<span class="hist-icon ng"></span>' +
+    '<div class="hist-info">' +
+      '<div class="hist-name">' + escHtml(opt.name || 'Running Session') + '</div>' +
+      '<div class="hist-meta">' + escHtml(opt.meta || 'Running...') + '</div>' +
+    '</div>';
+  el.onclick = () => onRunningHistClick(el);
+  list.prepend(el);
+  runningHistEl = el;
+}
+
+function onRunningHistClick(el) {
+  currentLogView = 'live';
+  activeHistIdx = -1;
+  document.querySelectorAll('.hist-item').forEach(x => x.classList.remove('active'));
+  el.classList.add('active');
+  setTerminalInteractive(running);
+  renderLiveLogs();
+  if (running) setRptPlaceholder('Test is still running. Report will appear when finished.');
+  saveUiState();
 }
 
 // Progress
@@ -810,6 +1244,7 @@ function updateProg(d) {
   document.getElementById('s-pass').textContent = d.passed || 0;
   document.getElementById('s-fail').textContent = d.failed || 0;
   document.getElementById('s-total').textContent = d.total || 0;
+  saveUiState();
 }
 
 // Status badge
@@ -819,6 +1254,7 @@ function setStatus(state, txt) {
   b.className = 'badge ' + state;
   document.getElementById('badge-txt').textContent = txt;
   dp.style.display = state === 'running' ? 'block' : 'none';
+  saveUiState();
 }
 
 // Report
@@ -829,6 +1265,7 @@ function showReport(path) {
         document.getElementById('rpt-scroll').innerHTML = marked.parse(d.content);
         document.getElementById('rpt-name').textContent =
           path.split(/[/\\]/).pop().replace('.md','');
+        saveUiState();
       }
     });
 }
@@ -836,6 +1273,8 @@ function showReport(path) {
 function setRptPlaceholder(msg) {
   document.getElementById('rpt-scroll').innerHTML =
     '<div class="rpt-ph"><p style="font-size:13px;color:var(--t3)">' + msg + '</p></div>';
+  document.getElementById('rpt-name').textContent = '';
+  saveUiState();
 }
 
 // History
@@ -846,14 +1285,31 @@ function loadHistory() {
 function renderHistory(reports) {
   const list = document.getElementById('hist-list');
   list.innerHTML = '';
+  runningHistEl = null;
+  const shouldShowRunning = running;
+  if (shouldShowRunning) {
+    const item = restoredRunningHistory || {
+      name: new Date().toLocaleString('zh-CN', {hour12:false}),
+      meta: 'Running...',
+    };
+    renderRunningHistoryItem({
+      name: item.name,
+      meta: item.meta || 'Running...',
+      active: restoredHistoryKey === 'running' || (!restoredHistoryPath && activeHistIdx < 0),
+    });
+  }
   if (!reports.length) {
-    list.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px">No history yet</div>';
+    if (!runningHistEl) {
+      list.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px">No history yet</div>';
+    }
+    saveUiState();
     return;
   }
   reports.forEach((r, i) => {
     const el = document.createElement('div');
-    el.className = 'hist-item' + (i === 0 ? ' active' : '');
+    el.className = 'hist-item';
     el.dataset.path = r.md_path;
+    el.dataset.sessionLog = r.session_log || '';
     el.dataset.idx = i;
     const pct = parseFloat(r.pass_rate) || 0;
     const ok = pct >= 100;
@@ -866,11 +1322,46 @@ function renderHistory(reports) {
     el.onclick = () => onHistClick(el, r, i);
     list.appendChild(el);
   });
-  // Auto-load latest report
-  if (reports.length && !running) showReport(reports[0].md_path);
+  let selected = false;
+  if (restoredHistoryKey === 'running' && runningHistEl) {
+    document.querySelectorAll('.hist-item').forEach(x => x.classList.remove('active'));
+    runningHistEl.classList.add('active');
+    selected = true;
+  }
+  if (restoredHistoryPath) {
+    const target = Array.from(list.querySelectorAll('.hist-item')).find(x => x.dataset.path === restoredHistoryPath);
+    if (target) {
+      document.querySelectorAll('.hist-item').forEach(x => x.classList.remove('active'));
+      target.classList.add('active');
+      activeHistIdx = parseInt(target.dataset.idx || '-1', 10);
+      if (!running) {
+        showReport(restoredHistoryPath);
+        loadHistoricalLogs(target.dataset.sessionLog || '');
+      }
+      selected = true;
+    }
+    restoredHistoryPath = '';
+  }
+  if (!selected && activeHistIdx >= 0) {
+    const byIdx = list.querySelector('.hist-item[data-idx="' + activeHistIdx + '"]');
+    if (byIdx) {
+      document.querySelectorAll('.hist-item').forEach(x => x.classList.remove('active'));
+      byIdx.classList.add('active');
+      selected = true;
+    }
+  }
+  if (!selected) {
+    const fallback = list.querySelector('.hist-item[data-path]');
+    if (fallback) fallback.classList.add('active');
+  }
+  restoredHistoryKey = '';
+  restoredRunningHistory = null;
+  // Keep default as a fresh testing page; do not auto-open latest history report.
+  saveUiState();
 }
 
 function onHistClick(el, r, i) {
+  currentLogView = 'history';
   if (activeHistIdx === i) {
     // Click active item again to reset selection to latest
     activeHistIdx = -1;
@@ -878,17 +1369,53 @@ function onHistClick(el, r, i) {
       x.classList.toggle('active', j === 0);
     });
     if (running) {
-      setRptPlaceholder('Test is still running. Report will appear when finished.');
+      currentLogView = 'live';
+      if (runningHistEl) {
+        onRunningHistClick(runningHistEl);
+      } else {
+        renderLiveLogs();
+      }
     } else {
       const first = document.querySelector('.hist-item');
-      if (first) showReport(first.dataset.path);
+      if (first) {
+        showReport(first.dataset.path);
+        loadHistoricalLogs(first.dataset.sessionLog || '');
+      }
     }
+    saveUiState();
     return;
   }
   activeHistIdx = i;
+  setTerminalInteractive(false);
   document.querySelectorAll('.hist-item').forEach(x => x.classList.remove('active'));
   el.classList.add('active');
   showReport(r.md_path);
+  loadHistoricalLogs(r.session_log || '');
+  saveUiState();
+}
+
+function loadHistoricalLogs(sessionPath) {
+  currentLogView = 'history';
+  clearLog(false);
+  if (!sessionPath) {
+    appendLogs([{ text: 'No saved logs for this run.', type: 'dim' }], false);
+    return;
+  }
+  fetch('/session_log?path=' + encodeURIComponent(sessionPath))
+    .then(r => r.json())
+    .then(d => {
+      clearLog(false);
+      const items = Array.isArray(d.logs) ? d.logs : [];
+      if (!items.length) {
+        appendLogs([{ text: 'No saved logs for this run.', type: 'dim' }], false);
+        return;
+      }
+      appendLogs(items, false);
+    })
+    .catch(() => {
+      clearLog(false);
+      appendLogs([{ text: 'Failed to load saved logs.', type: 'fail' }], false);
+    });
 }
 
 // Coverage
@@ -946,6 +1473,7 @@ function setCoverageFile(fileId) {
   document.getElementById('cov-range-info').textContent = formatRangeInfo(file.ranges || [], file.total_lines || 0);
   renderCoverageHeatmap(file.ranges || [], file.total_lines || 0);
   renderCoverageFunctions(file.functions || []);
+  saveUiState();
 }
 
 function formatRangeInfo(ranges, totalLines) {
@@ -1039,6 +1567,8 @@ function toggleSidebar() {
 function onProvider() {
   const p = document.getElementById('provider').value;
   const sel = document.getElementById('model-sel');
+  const preferred = arguments[0] || '';
+  const skipSave = !!arguments[1];
   sel.innerHTML = '';
   const opts = p === 'openrouter'
     ? [['anthropic/claude-sonnet-4-6','Claude Sonnet 4.6'],
@@ -1053,9 +1583,16 @@ function onProvider() {
     o.value = v; o.textContent = l;
     sel.appendChild(o);
   });
+  if (preferred && Array.from(sel.options).some(o => o.value === preferred)) {
+    sel.value = preferred;
+  }
+  if (!skipSave) saveUiState();
 }
-onProvider();
-
+onProvider('', true);
+document.getElementById('provider').addEventListener('change', () => saveUiState());
+document.getElementById('model-sel').addEventListener('change', () => saveUiState());
+document.getElementById('prompt').addEventListener('input', () => saveUiState());
+document.getElementById('api-key').addEventListener('input', () => saveApiKeySession());
 // Clock
 function tick() {
   document.getElementById('tb-time').textContent =
@@ -1123,7 +1660,7 @@ def history():
             tstr = dt.strftime('%m/%d %H:%M')
         except:
             tstr = ts
-        project, pass_rate = 'SQLite3', '?%'
+        project, pass_rate, session_log = 'SQLite3', '?%', ''
         jp = base + '.json'
         if os.path.exists(jp):
             try:
@@ -1131,9 +1668,20 @@ def history():
                     d = json.load(f)
                 project = d.get('project', project)
                 pass_rate = d.get('summary', {}).get('pass_rate', pass_rate)
+                session_log = d.get('session_log', '') or ''
             except:
                 pass
-        reports.append({'md_path': md, 'time': tstr, 'project': project, 'pass_rate': pass_rate})
+        if not session_log:
+            legacy_log = os.path.join(out, f'session_{ts}.jsonl')
+            if os.path.exists(legacy_log):
+                session_log = legacy_log
+        reports.append({
+            'md_path': md,
+            'time': tstr,
+            'project': project,
+            'pass_rate': pass_rate,
+            'session_log': session_log,
+        })
     return jsonify({'reports': reports})
 
 
@@ -1147,6 +1695,26 @@ def report():
             return jsonify({'content': f.read()})
     except Exception as e:
         return jsonify({'error': str(e), 'content': ''})
+
+
+@app.route('/session_log')
+def session_log():
+    path = request.args.get('path', '')
+    if not path or not os.path.exists(path):
+        return jsonify({'logs': []})
+    try:
+        from core.terminal import SessionRecorder
+        events = SessionRecorder.load(path)
+        logs = []
+        for ev in events:
+            t = str(ev.get('type', 'info'))
+            data = str(ev.get('data', ''))
+            if not data.strip():
+                continue
+            logs.append({'text': data, 'type': t})
+        return jsonify({'logs': logs})
+    except Exception:
+        return jsonify({'logs': []})
 
 
 @app.route('/coverage')
@@ -1305,7 +1873,7 @@ def coverage():
 
 @socketio.on('start_test')
 def on_start(data):
-    global test_running, test_thread
+    global test_running, test_thread, active_sid
     if test_running:
         emit('log', {'text': 'A test run is already in progress.', 'type': 'fail'})
         return
@@ -1319,27 +1887,67 @@ def on_start(data):
             os.environ['V3_MODEL'] = m
     test_running = True
     sid = request.sid
-    test_thread = threading.Thread(
-        target=_run, args=(sid, data.get('prompt', ''), data.get('framework')),
-        daemon=True
+    active_sid = sid
+    test_thread = socketio.start_background_task(
+        _run, sid, data.get('prompt', ''), data.get('framework')
     )
-    test_thread.start()
 
 
 @socketio.on('stop_test')
 def on_stop():
-    global test_running
+    global test_running, terminal_executor, active_sid
     test_running = False
+    terminal_executor = None
     socketio.emit('log', {'text': 'Stop requested.', 'type': 'fail'})
 
 
+@socketio.on('terminal_cmd')
+def on_terminal_cmd(data):
+    global terminal_executor, test_running
+    cmd = (data or {}).get('cmd', '').strip()
+    if not cmd:
+        return
+    if not test_running:
+        emit('log', {'text': 'Terminal is read-only after run completes.', 'type': 'dim'})
+        return
+    if terminal_executor is None:
+        root = os.path.dirname(os.path.abspath(__file__))
+        terminal_executor = TerminalExecutor(workdir=root)
+    def _run_terminal():
+        try:
+            terminal_executor.run(cmd)
+        except Exception as e:
+            socketio.emit('log', {'text': f'Terminal command error: {e}', 'type': 'fail'})
+    socketio.start_background_task(_run_terminal)
+
+
 def _run(sid, prompt, custom_fw):
-    global test_running
+    global test_running, terminal_executor, active_sid
     import builtins, importlib, traceback
+    from core.terminal import set_push_hook, set_session_recorder, set_console_echo, SessionRecorder
+
+    log_buf = []
+    last_log_flush = time.time()
+    LOG_BATCH_MAX = 40
+    LOG_FLUSH_SEC = 0.12
+    current_stage_label = None
+    current_stage_start = None
+
+    def flush_logs(force=False):
+        nonlocal log_buf, last_log_flush
+        if not log_buf:
+            return
+        now = time.time()
+        if not force and len(log_buf) < LOG_BATCH_MAX and (now - last_log_flush) < LOG_FLUSH_SEC:
+            return
+        socketio.emit('log_batch', {'items': log_buf[:]})
+        log_buf.clear()
+        last_log_flush = now
 
     def push(text, t='info'):
         if not str(text).strip(): return
-        socketio.emit('log', {'text': str(text), 'type': t}, room=sid)
+        log_buf.append({'text': str(text), 'type': t})
+        flush_logs(False)
 
     orig_print = builtins.print
     orig_input = builtins.input
@@ -1350,38 +1958,68 @@ def _run(sid, prompt, custom_fw):
         text = sep.join(str(x) for x in a) + ('' if end is None else str(end))
         for line in text.splitlines():
             if line.strip():
-                t = 'info'
-                if '[stderr]' in line:
-                    t = 'stderr'
-                elif '[stdout]' in line:
-                    t = 'stdout'
-                elif '[Terminal]' in line or line.strip().startswith('$'):
-                    t = 'cmd'
-                elif 'PASS' in line:
-                    t = 'pass'
-                elif 'FAIL' in line or 'ERROR' in line:
-                    t = 'fail'
-                push(line, t)
-        orig_print(*a, **kw)
+                stripped = line.strip()
+                # TerminalExecutor already streams these via push_hook; skip duplicate emits here.
+                if (
+                    stripped.startswith('[Terminal]')
+                    or stripped.startswith('[stdout]')
+                    or stripped.startswith('[stderr]')
+                    or stripped.startswith('[rc]')
+                    or stripped.startswith('[info]')
+                    or stripped.startswith('[!]')
+                ):
+                    continue
+                lvl = 'info'
+                tl = line.lower()
+                if 'pass' in tl: lvl = 'pass'
+                elif 'fail' in tl or 'error' in tl: lvl = 'fail'
+                elif line.strip().startswith('[Step') or '[Terminal]' in line: lvl = 'sec'
+                elif line.strip().startswith('$') or '[stdout]' in line: lvl = 'cmd'
+                push(line, lvl)
+        if os.environ.get('WEB_APP_ECHO_PRINT', '0') == '1':
+            orig_print(*a, **kw)
 
     def inp(prompt_text=''):
-        push(f'[auto-confirm] {prompt_text} -> y', 'muted')
+        msg = f'[auto-confirm] {prompt_text} -> y'
+        push(msg, 'muted')
         return 'y'
 
     builtins.print = p
     builtins.input = inp
     rpt_path, ok = None, False
+    recorder = None
+    session_log_path = ''
 
     try:
+        # Web mode does not need mirrored backend terminal printing.
+        set_console_echo(False)
         stage_total = 6
         def stage(done, label):
+            nonlocal current_stage_label, current_stage_start
+            now = time.time()
+            if current_stage_label is not None and current_stage_start is not None:
+                socketio.emit('stage_timing', {
+                    'name': current_stage_label,
+                    'seconds': now - current_stage_start,
+                })
+            current_stage_label = label
+            current_stage_start = now
+            flush_logs(True)
             socketio.emit('progress', {
-                'done': done,
-                'total': stage_total,
-                'passed': 0,
-                'failed': 0,
-                'label': label,
-            }, room=sid)
+            'done': done,
+            'total': stage_total,
+            'passed': 0,
+            'failed': 0,
+            'label': label,
+        })
+
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        recorder = SessionRecorder(ts)
+        session_log_path = recorder.path
+        set_session_recorder(recorder)
+        def push_hook(ev_type, data):
+            push(data, ev_type if ev_type not in {'rc'} else 'info')
+        set_push_hook(push_hook)
 
         import config
         importlib.reload(config)
@@ -1415,10 +2053,10 @@ def _run(sid, prompt, custom_fw):
 
         # Compile
         stage(2, 'Step 2/6 - Compile check')
+        terminal_executor = TerminalExecutor(workdir=root)
         if framework.get('compile_cmd'):
             push('\n[Step 2/6] Compiling...', 'sec')
-            from core.terminal import TerminalExecutor
-            res = TerminalExecutor(workdir=root).run(framework['compile_cmd'])
+            res = terminal_executor.run(framework['compile_cmd'])
             push(('Compile succeeded' if res.success else 'Compile failed: ' + res.stderr),
                  'pass' if res.success else 'fail')
         else:
@@ -1436,7 +2074,8 @@ def _run(sid, prompt, custom_fw):
         stage(4, 'Step 4/6 - Generating tasks')
         tasks = PlannerAgent().plan(framework, static_report=static_rpt)
         total = len(tasks)
-        socketio.emit('progress', {'done':0,'total':total,'passed':0,'failed':0,'label':f'Preparing {total} tasks'}, room=sid)
+        flush_logs(True)
+        socketio.emit('progress', {'done':0,'total':total,'passed':0,'failed':0,'label':f'Preparing {total} tasks'})
 
         # Execute
         push(f'\n[Step 5/6] Executing tests ({total} tasks)...', 'sec')
@@ -1456,11 +2095,12 @@ def _run(sid, prompt, custom_fw):
                 report.errors += 1; push('  ERROR', 'fail')
             else:
                 report.failed += 1; push('  FAIL', 'fail')
+            flush_logs(True)
             socketio.emit('progress', {
                 'done':i+1,'total':total,
                 'passed':report.passed,'failed':report.failed,
                 'label':f'{i+1}/{total} - {task.task_id}'
-            }, room=sid)
+            })
 
         # Refine
         push('\n[Step 6/6] Refining failed tests...', 'sec')
@@ -1504,6 +2144,17 @@ def _run(sid, prompt, custom_fw):
         final = merge_reports(report, all_rpts) if all_rpts else report
         rep = Reporter()
         jp, mp = rep.save(final)
+        if session_log_path:
+            try:
+                meta = {}
+                if os.path.exists(jp):
+                    with open(jp, encoding='utf-8') as f:
+                        meta = json.load(f)
+                meta['session_log'] = session_log_path
+                with open(jp, 'w', encoding='utf-8') as f:
+                    json.dump(meta, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
         append_static_analysis(mp, static_rpt)
         for i, r in enumerate(all_rpts):
             append_refined_results(mp, r, all_tasks, round_num=i+1, confirmed_bugs=bugs)
@@ -1513,15 +2164,34 @@ def _run(sid, prompt, custom_fw):
         push('\n' + '=' * 48, 'sec')
         push(f'  Completed. Pass rate: {final.pass_rate:.1f}%', 'pass')
         push('=' * 48, 'sec')
+        flush_logs(True)
 
     except Exception as e:
         push(f'Exception: {e}', 'fail')
         push(traceback.format_exc(), 'fail')
+        flush_logs(True)
     finally:
+        if current_stage_label is not None and current_stage_start is not None:
+            socketio.emit('stage_timing', {
+                'name': current_stage_label,
+                'seconds': time.time() - current_stage_start,
+            })
+        flush_logs(True)
         builtins.print = orig_print
         builtins.input = orig_input
+        set_push_hook(None)
+        set_session_recorder(None)
+        set_console_echo(True)
+        if recorder:
+            recorder.close()
+        terminal_executor = None
         test_running = False
-        socketio.emit('test_done', {'success': ok, 'report_path': rpt_path}, room=sid)
+        active_sid = None
+        socketio.emit('test_done', {
+            'success': ok,
+            'report_path': rpt_path,
+            'session_log': session_log_path,
+        })
 
 
 if __name__ == '__main__':
