@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # web_app.py - Testing Agent Web UI
 # Run: python web_app.py, then open http://localhost:5000
 
@@ -6,7 +6,15 @@ import os, sys, json, glob, threading, queue, time, importlib
 from datetime import datetime
 from typing import Optional
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+def _get_app_root() -> str:
+    # In frozen exe mode, keep all runtime data beside the executable.
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+APP_ROOT = _get_app_root()
+
+sys.path.insert(0, APP_ROOT)
 
 from flask import Flask, render_template_string, request, jsonify
 from flask_socketio import SocketIO, emit
@@ -21,6 +29,10 @@ test_running = False
 terminal_executor: Optional[TerminalExecutor] = None
 test_thread = None
 active_sid: Optional[str] = None
+running_session_log_path: str = ''
+running_session_id: str = ''
+running_live_logs = []
+running_live_logs_lock = threading.Lock()
 
 DEFAULT_FRAMEWORK = {
     "project_name": "SQLite3 Database Engine",
@@ -195,20 +207,58 @@ body{
 }
 #sidebar.collapsed .sb-section-label{opacity:0}
 .sb-new{
-  margin:6px 8px 8px;
-  width:calc(100% - 16px);
+  margin:8px 4px 10px 4px;
+  width:calc(100% - 8px);
+  height:30px;
   border:1px solid rgba(120,90,54,0.22);
   background:#e7d8bd;
   color:#3f2d1a;
   border-radius:7px;
   font-size:11px;
   font-weight:600;
-  padding:6px 8px;
+  padding:0 8px 0 4px;
   cursor:pointer;
   transition:all .15s;
+  display:flex;align-items:center;justify-content:flex-start;gap:8px;
+  overflow:hidden;
+  line-height:1;
 }
 .sb-new:hover{background:#dfccae}
-#sidebar.collapsed .sb-new{opacity:0;pointer-events:none}
+.sb-new:disabled{
+  opacity:.55;
+  cursor:not-allowed;
+  filter:saturate(.85);
+}
+.sb-new-icon{
+  font-size:14px;line-height:1;
+  width:13px;min-width:13px;
+  display:inline-flex;align-items:center;justify-content:center;
+  transform:translateX(4px);
+}
+.sb-new-label{
+  font-size:11px;
+  white-space:nowrap;
+  display:inline-block;
+  max-width:120px;
+  overflow:hidden;
+  transition:opacity .2s,max-width .25s,margin .25s;
+}
+#sidebar.collapsed .sb-new{
+  opacity:1;pointer-events:auto;
+  width:30px;
+  height:30px;
+  margin:8px 0 10px 2px;
+  padding:0 0 0 4px;
+  border-radius:7px;
+  justify-content:flex-start;
+}
+#sidebar.collapsed .sb-new-label{
+  opacity:0;
+  max-width:0;
+  margin:0;
+  pointer-events:none;
+}
+#sidebar.collapsed .sb-new-icon{font-size:14px}
 
 .hist-item{
   padding:8px 10px;border-radius:8px;cursor:pointer;
@@ -240,6 +290,13 @@ body{
 .hist-name{font-size:12.5px;font-weight:600;color:#2d2114;overflow:hidden;text-overflow:ellipsis}
 .hist-meta{font-size:10.5px;color:#6f5538;font-family:'JetBrains Mono',monospace;margin-top:1px}
 #sidebar.collapsed .hist-info{opacity:0}
+#sidebar.collapsed .hist-icon{opacity:0}
+#sidebar.collapsed .hist-item.active{
+  background:transparent;
+  border-color:transparent;
+  box-shadow:none;
+}
+#sidebar.collapsed .hist-item.active::after{display:none}
 
 /* Coverage card at bottom */
 .sb-footer{
@@ -626,8 +683,11 @@ body{
   </div>
 
   <div class="sb-body">
+    <button class="sb-new" id="btn-new-test" onclick="newTestSession()">
+      <span class="sb-new-icon">+</span>
+      <span class="sb-new-label">New Test</span>
+    </button>
     <div class="sb-section-label">History</div>
-    <button class="sb-new" onclick="newTestSession()">+ New Test</button>
     <div id="hist-list"><div style="font-size:11px;color:var(--t3);padding:8px">Loading...</div></div>
   </div>
 
@@ -674,7 +734,6 @@ body{
   <!-- TOPBAR -->
   <header class="topbar">
     <div class="topbar-sub" id="tb-time">-</div>
-    <div class="topbar-sub" id="stage-time" style="margin-left:10px">Stage: -</div>
     <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
       <button class="btn-stop" id="btn-stop" onclick="stopTest()">Stop</button>
       <div class="badge idle" id="badge">
@@ -694,6 +753,9 @@ body{
       </div>
       <div id="log-scroll">
         <div class="log-line empty">Waiting to start test...</div>
+      </div>
+      <div style="padding:6px 12px;border-top:1px solid var(--b1);background:var(--surface);display:none" id="log-more-wrap">
+        <button class="terminal-send" id="log-more-btn" onclick="loadMoreLiveLogs()" style="height:26px;padding:0 10px">Load More</button>
       </div>
       <!-- PROGRESS -->
       <div id="prog-wrap">
@@ -789,68 +851,18 @@ let persistReady = false;
 let restoredHistoryKey = '';
 let restoredRunningHistory = null;
 let uiSaveTimer = null;
-let logSaveTimer = null;
 let pendingLogs = [];
 let logsFlushTimer = null;
 let liveLogEntries = [];
 let currentLogView = 'live'; // 'live' | 'history'
+let currentSessionLogPath = '';
+let liveChunkStart = 0;
+let liveHasMore = false;
+const LIVE_CHUNK_SIZE = 200;
 
 const UI_STATE_KEY = 'stupid_agent_ui_state_v1';
 const API_KEY_SESSION_KEY = 'stupid_agent_api_key_session_v1';
-const LOG_SNAPSHOT_KEY = 'stupid_agent_log_snapshot_v1';
-const MAX_SAVED_LOGS = 600;
-const MAX_SAVED_LOG_CHARS = 120000;
 const MAX_LIVE_LOG_ENTRIES = 4000;
-
-function collectLogsForSaveLimited() {
-  const nodes = Array.from(document.querySelectorAll('#log-scroll .log-line'))
-    .filter(n => !n.classList.contains('empty'))
-    .slice(-MAX_SAVED_LOGS);
-  const out = [];
-  let total = 0;
-  for (let i = nodes.length - 1; i >= 0; i--) {
-    const t = nodes[i].textContent || '';
-    const tp = nodes[i].dataset.type || '';
-    if (total + t.length > MAX_SAVED_LOG_CHARS) break;
-    out.push({ text: t, type: tp });
-    total += t.length;
-  }
-  out.reverse();
-  return out;
-}
-
-function saveLogSnapshot() {
-  if (!persistReady) return;
-  if (logSaveTimer) return;
-  const delay = running ? 1800 : 400;
-  logSaveTimer = setTimeout(() => {
-    logSaveTimer = null;
-    try {
-      localStorage.setItem(LOG_SNAPSHOT_KEY, JSON.stringify(collectLogsForSaveLimited()));
-    } catch (_) {
-      try { localStorage.removeItem(LOG_SNAPSHOT_KEY); } catch (__){}
-    }
-  }, delay);
-}
-
-function restoreLogSnapshot() {
-  try {
-    const raw = localStorage.getItem(LOG_SNAPSHOT_KEY);
-    if (!raw) return false;
-    const logs = JSON.parse(raw);
-    if (!Array.isArray(logs) || !logs.length) return false;
-    liveLogEntries = logs.map(item => ({
-      text: item?.text || '',
-      type: item?.type || 'info',
-    }));
-    const logScroll = document.getElementById('log-scroll');
-    logScroll.innerHTML = '';
-    appendLogs(liveLogEntries, false);
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
 
 function saveUiState() {
   if (!persistReady) return;
@@ -886,6 +898,7 @@ function saveUiStateNow() {
   const state = {
     running,
     logView: currentLogView,
+    currentSessionLogPath,
     provider: providerEl ? providerEl.value : '',
     model: modelEl ? modelEl.value : '',
     prompt: promptEl ? promptEl.value : '',
@@ -908,7 +921,11 @@ function saveUiStateNow() {
     activeHistoryKey: activeEl
       ? (activeEl.dataset.temp === 'running' ? 'running' : (activeEl.dataset.path || ''))
       : '',
-    runningHistory: runningEl ? { name: runningName, meta: runningMeta } : null,
+    runningHistory: runningEl ? {
+      name: runningName,
+      meta: runningMeta,
+      sessionLog: runningEl?.dataset?.sessionLog || currentSessionLogPath || '',
+    } : null,
     activeCoverageFile,
     reportPath: rptName && rptName.textContent
       ? ('output/' + rptName.textContent + '.md')
@@ -952,16 +969,14 @@ function restoreUiState() {
   running = !!state.running;
   // If a run is still active, always recover to live log view.
   currentLogView = running ? 'live' : (state.logView === 'history' ? 'history' : 'live');
+  currentSessionLogPath = state.currentSessionLogPath || '';
   activeHistIdx = Number.isInteger(state.activeHistIdx) ? state.activeHistIdx : -1;
   activeCoverageFile = state.activeCoverageFile || '';
   restoredHistoryPath = state.activeHistoryPath || '';
   restoredHistoryKey = state.activeHistoryKey || '';
   restoredRunningHistory = state.runningHistory || null;
 
-  const logRestored = restoreLogSnapshot();
-  if (!logRestored) {
-    document.getElementById('log-scroll').innerHTML = '<div class="log-line empty">Waiting to start test...</div>';
-  }
+  document.getElementById('log-scroll').innerHTML = '<div class="log-line empty">Waiting to start test...</div>';
 
   setStatus(state.badgeState || (running ? 'running' : 'idle'), state.badgeText || (running ? 'Running' : 'Idle'));
 
@@ -981,7 +996,11 @@ function restoreUiState() {
   setTerminalInteractive(!!state.terminalInteractive && running);
 
   if (running) {
-    renderLiveLogs();
+    if (currentSessionLogPath) {
+      loadSessionLogsToLive(currentSessionLogPath);
+    } else {
+      renderLiveLogs();
+    }
     setRptPlaceholder('Test is still running. Waiting for new output...');
   } else if (state.reportPath) {
     showReport(state.reportPath);
@@ -999,17 +1018,59 @@ io_socket.on('connect', () => {
     persistReady = false;
     const restored = restoreUiState();
     if (!restored) newTestSession();
+    fetch('/status').then(r => r.json()).then(s => {
+      if (!s) return;
+      if (s.session_log) {
+        currentSessionLogPath = s.session_log;
+        const runEl = document.querySelector('.hist-item[data-temp="running"]');
+        if (runEl) runEl.dataset.sessionLog = s.session_log;
+      }
+      if (s.running) {
+        running = true;
+        setNewTestEnabled(false);
+        currentLogView = 'live';
+        setStatus('running', 'Running');
+        document.getElementById('btn-run').disabled = true;
+        document.getElementById('btn-stop').classList.add('show');
+        document.getElementById('prog-wrap').style.display = 'block';
+        if (currentSessionLogPath) {
+          loadSessionLogsToLive(currentSessionLogPath);
+        } else {
+          setTimeout(() => {
+            fetch('/status').then(r => r.json()).then(s2 => {
+              if (s2?.session_log) {
+                currentSessionLogPath = s2.session_log;
+                loadSessionLogsToLive(currentSessionLogPath);
+              }
+            }).catch(() => {});
+          }, 500);
+        }
+      } else {
+        // Backend is not running: clear any stale "running" UI restored from local state.
+        if (running) {
+          running = false;
+          currentLogView = 'live';
+          currentSessionLogPath = '';
+          liveLogEntries = [];
+          pendingLogs = [];
+          if (runningHistEl && runningHistEl.parentNode) runningHistEl.remove();
+          runningHistEl = null;
+          document.getElementById('btn-run').disabled = false;
+          document.getElementById('btn-stop').classList.remove('show');
+          document.getElementById('prog-wrap').style.display = 'none';
+          setTerminalInteractive(false);
+          setStatus('idle', 'Idle');
+          renderLiveLogs();
+          setRptPlaceholder('New test session ready. Configure options and click Run.');
+        }
+        setNewTestEnabled(true);
+        saveUiState();
+      }
+    }).catch(() => {});
     persistReady = true;
     saveUiState();
     pageInitialized = true;
   }
-});
-
-io_socket.on('stage_timing', d => {
-  if (!d) return;
-  const name = d.name || 'Stage';
-  const sec = typeof d.seconds === 'number' ? d.seconds.toFixed(1) : '-';
-  document.getElementById('stage-time').textContent = `Stage: ${name} (${sec}s)`;
 });
 
 io_socket.on('log', d => enqueueLog(d.text, d.type || 'info'));
@@ -1024,8 +1085,21 @@ io_socket.on('log_batch', d => {
 
 io_socket.on('progress', d => updateProg(d));
 
+io_socket.on('session_ready', d => {
+  const p = d?.session_log || '';
+  if (!p) return;
+  currentSessionLogPath = p;
+  if (running) {
+    const el = document.querySelector('.hist-item[data-temp="running"]');
+    if (el) el.dataset.sessionLog = p;
+    loadSessionLogsToLive(p);
+  }
+  saveUiState();
+});
+
 io_socket.on('test_done', d => {
   running = false;
+  if (d?.session_log) currentSessionLogPath = d.session_log;
   setTerminalInteractive(false);
   setStatus(d.success ? 'done' : 'error', d.success ? 'Completed' : 'Failed');
   document.getElementById('btn-run').disabled = false;
@@ -1033,8 +1107,13 @@ io_socket.on('test_done', d => {
   if (d.report_path) showReport(d.report_path);
   loadHistory();
   loadCoverage();
+  setNewTestEnabled(true);
   toast(d.success ? 'Test completed' : 'Test finished with errors');
-  if (currentLogView === 'live') renderLiveLogs();
+  if (d?.session_log) {
+    loadSessionLogsToLive(d.session_log);
+  } else if (currentLogView === 'live') {
+    renderLiveLogs();
+  }
   saveUiState();
 });
 
@@ -1045,8 +1124,12 @@ function startTest() {
   if (!key) { toast('Please enter API key'); return; }
 
   running = true;
+  setNewTestEnabled(false);
   currentLogView = 'live';
   liveLogEntries = [];
+  liveChunkStart = 0;
+  liveHasMore = false;
+  currentSessionLogPath = '';
   setTerminalInteractive(true);
   prependRunningHistory();
   clearLog();
@@ -1073,6 +1156,12 @@ function stopTest() {
   saveUiState();
 }
 
+function setNewTestEnabled(enabled) {
+  const btn = document.getElementById('btn-new-test');
+  if (!btn) return;
+  btn.disabled = !enabled;
+}
+
 // Logs
 function enqueueLog(text, type) {
   const item = { text, type };
@@ -1080,9 +1169,10 @@ function enqueueLog(text, type) {
   if (liveLogEntries.length > MAX_LIVE_LOG_ENTRIES) {
     liveLogEntries.splice(0, liveLogEntries.length - MAX_LIVE_LOG_ENTRIES);
   }
-  saveLogSnapshot();
   if (currentLogView !== 'live') return;
   pendingLogs.push(item);
+  liveHasMore = liveChunkStart > 0;
+  updateLoadMoreButton();
   if (logsFlushTimer) return;
   logsFlushTimer = setTimeout(flushQueuedLogs, 70);
 }
@@ -1093,9 +1183,10 @@ function enqueueLogBatch(items) {
   if (liveLogEntries.length > MAX_LIVE_LOG_ENTRIES) {
     liveLogEntries.splice(0, liveLogEntries.length - MAX_LIVE_LOG_ENTRIES);
   }
-  saveLogSnapshot();
   if (currentLogView !== 'live') return;
   pendingLogs.push(...items);
+  liveHasMore = liveChunkStart > 0;
+  updateLoadMoreButton();
   if (logsFlushTimer) return;
   logsFlushTimer = setTimeout(flushQueuedLogs, 70);
 }
@@ -1116,13 +1207,15 @@ function renderLiveLogs() {
   pendingLogs = [];
   clearLog(false);
   if (!liveLogEntries.length) {
-    addLog('Waiting to start test...', 'dim');
+    addLog(running ? 'Running... waiting for output' : 'Waiting to start test...', 'dim');
+    updateLoadMoreButton();
     return;
   }
   appendLogs(liveLogEntries, false);
+  updateLoadMoreButton();
 }
 
-function appendLogs(items, shouldPersist) {
+function appendLogs(items, shouldPersist, stickBottom = true) {
   const scr = document.getElementById('log-scroll');
   const ph = scr.querySelector('.log-line.empty');
   if (ph && items.length) ph.remove();
@@ -1135,11 +1228,43 @@ function appendLogs(items, shouldPersist) {
     frag.appendChild(d);
   });
   scr.appendChild(frag);
-  scr.scrollTop = scr.scrollHeight;
+  if (stickBottom) {
+    scr.scrollTop = scr.scrollHeight;
+  } else {
+    scr.scrollTop = 0;
+  }
   if (shouldPersist) {
-    saveLogSnapshot();
     if (!running) saveUiState();
   }
+}
+
+function prependLogs(items) {
+  if (!items || !items.length) return;
+  const scr = document.getElementById('log-scroll');
+  const ph = scr.querySelector('.log-line.empty');
+  if (ph) ph.remove();
+  const before = scr.scrollHeight;
+  const frag = document.createDocumentFragment();
+  items.forEach(item => {
+    const d = document.createElement('div');
+    d.className = 'log-line ' + classOf(item.text || '', item.type || '');
+    d.dataset.type = item.type || '';
+    d.textContent = item.text || '';
+    frag.appendChild(d);
+  });
+  scr.prepend(frag);
+  const after = scr.scrollHeight;
+  scr.scrollTop += (after - before);
+}
+
+function updateLoadMoreButton() {
+  const wrap = document.getElementById('log-more-wrap');
+  const btn = document.getElementById('log-more-btn');
+  if (!wrap || !btn) return;
+  const show = running && currentLogView === 'live' && !!currentSessionLogPath;
+  wrap.style.display = show ? 'block' : 'none';
+  btn.style.display = liveHasMore ? 'inline-flex' : 'none';
+  btn.disabled = !liveHasMore;
 }
 
 function addLog(text, type) {
@@ -1160,7 +1285,6 @@ function classOf(text, type) {
 function clearLog(shouldPersist = true) {
   document.getElementById('log-scroll').innerHTML = '';
   if (shouldPersist) {
-    saveLogSnapshot();
     saveUiState();
   }
 }
@@ -1178,9 +1302,16 @@ function setTerminalInteractive(enabled) {
 }
 
 function newTestSession() {
+  if (running) {
+    toast('Cannot create a new test while another test is running.');
+    return;
+  }
   running = false;
   currentLogView = 'live';
   liveLogEntries = [];
+  liveChunkStart = 0;
+  liveHasMore = false;
+  currentSessionLogPath = '';
   activeHistIdx = -1;
   if (runningHistEl && runningHistEl.parentNode) runningHistEl.remove();
   runningHistEl = null;
@@ -1190,9 +1321,10 @@ function newTestSession() {
   setTerminalInteractive(false);
   setStatus('idle', 'Idle');
   document.getElementById('log-scroll').innerHTML = '<div class="log-line empty">Waiting to start test...</div>';
-  try { localStorage.removeItem(LOG_SNAPSHOT_KEY); } catch (_){}
   setRptPlaceholder('New test session ready. Configure options and click Run.');
   document.querySelectorAll('.hist-item').forEach(x => x.classList.remove('active'));
+  updateLoadMoreButton();
+  setNewTestEnabled(true);
   saveUiState();
 }
 
@@ -1200,6 +1332,7 @@ function prependRunningHistory() {
   renderRunningHistoryItem({
     name: new Date().toLocaleString('zh-CN', {hour12:false}),
     meta: 'Running...',
+    sessionLog: currentSessionLogPath,
     active: true,
   });
   saveUiState();
@@ -1212,6 +1345,7 @@ function renderRunningHistoryItem(opt) {
   const el = document.createElement('div');
   el.className = 'hist-item' + (opt.active ? ' active' : '');
   el.dataset.temp = 'running';
+  el.dataset.sessionLog = opt.sessionLog || currentSessionLogPath || '';
   el.dataset.idx = '-1';
   el.innerHTML =
     '<span class="hist-icon ng"></span>' +
@@ -1226,11 +1360,18 @@ function renderRunningHistoryItem(opt) {
 
 function onRunningHistClick(el) {
   currentLogView = 'live';
+  if (el && el.dataset && el.dataset.sessionLog) {
+    currentSessionLogPath = el.dataset.sessionLog;
+  }
   activeHistIdx = -1;
   document.querySelectorAll('.hist-item').forEach(x => x.classList.remove('active'));
   el.classList.add('active');
   setTerminalInteractive(running);
-  renderLiveLogs();
+  if (running && currentSessionLogPath && !liveLogEntries.length) {
+    loadSessionLogsToLive(currentSessionLogPath);
+  } else {
+    renderLiveLogs();
+  }
   if (running) setRptPlaceholder('Test is still running. Report will appear when finished.');
   saveUiState();
 }
@@ -1286,15 +1427,22 @@ function renderHistory(reports) {
   const list = document.getElementById('hist-list');
   list.innerHTML = '';
   runningHistEl = null;
+  const shouldKeepNewTestView =
+    !running &&
+    activeHistIdx < 0 &&
+    !restoredHistoryPath &&
+    restoredHistoryKey !== 'running';
   const shouldShowRunning = running;
   if (shouldShowRunning) {
     const item = restoredRunningHistory || {
       name: new Date().toLocaleString('zh-CN', {hour12:false}),
       meta: 'Running...',
+      sessionLog: currentSessionLogPath,
     };
     renderRunningHistoryItem({
       name: item.name,
       meta: item.meta || 'Running...',
+      sessionLog: item.sessionLog || currentSessionLogPath || '',
       active: restoredHistoryKey === 'running' || (!restoredHistoryPath && activeHistIdx < 0),
     });
   }
@@ -1350,9 +1498,11 @@ function renderHistory(reports) {
       selected = true;
     }
   }
-  if (!selected) {
+  if (!selected && !shouldKeepNewTestView) {
     const fallback = list.querySelector('.hist-item[data-path]');
     if (fallback) fallback.classList.add('active');
+  } else if (!selected && shouldKeepNewTestView) {
+    activeHistIdx = -1;
   }
   restoredHistoryKey = '';
   restoredRunningHistory = null;
@@ -1362,6 +1512,7 @@ function renderHistory(reports) {
 
 function onHistClick(el, r, i) {
   currentLogView = 'history';
+  updateLoadMoreButton();
   if (activeHistIdx === i) {
     // Click active item again to reset selection to latest
     activeHistIdx = -1;
@@ -1389,6 +1540,7 @@ function onHistClick(el, r, i) {
   setTerminalInteractive(false);
   document.querySelectorAll('.hist-item').forEach(x => x.classList.remove('active'));
   el.classList.add('active');
+  currentSessionLogPath = r.session_log || el.dataset.sessionLog || '';
   showReport(r.md_path);
   loadHistoricalLogs(r.session_log || '');
   saveUiState();
@@ -1396,6 +1548,7 @@ function onHistClick(el, r, i) {
 
 function loadHistoricalLogs(sessionPath) {
   currentLogView = 'history';
+  updateLoadMoreButton();
   clearLog(false);
   if (!sessionPath) {
     appendLogs([{ text: 'No saved logs for this run.', type: 'dim' }], false);
@@ -1416,6 +1569,52 @@ function loadHistoricalLogs(sessionPath) {
       clearLog(false);
       appendLogs([{ text: 'Failed to load saved logs.', type: 'fail' }], false);
     });
+}
+
+function loadSessionLogsToLive(sessionPath) {
+  if (!sessionPath) {
+    renderLiveLogs();
+    return;
+  }
+  fetch('/session_log_page?path=' + encodeURIComponent(sessionPath) + '&tail=1&limit=' + LIVE_CHUNK_SIZE + '&live=1')
+    .then(r => r.json())
+    .then(d => {
+      const items = Array.isArray(d.logs) ? d.logs : [];
+      liveLogEntries = items.slice(-MAX_LIVE_LOG_ENTRIES).map(it => ({
+        text: it?.text || '',
+        type: it?.type || 'info',
+      }));
+      liveChunkStart = Number.isInteger(d.start) ? d.start : 0;
+      liveHasMore = !!d.has_more;
+      if (currentLogView === 'live') renderLiveLogs();
+    })
+    .catch(() => {
+      liveChunkStart = 0;
+      liveHasMore = false;
+      if (currentLogView === 'live') renderLiveLogs();
+    });
+}
+
+function loadMoreLiveLogs() {
+  if (!running || currentLogView !== 'live' || !currentSessionLogPath || !liveHasMore) return;
+  const end = liveChunkStart;
+  const start = Math.max(0, end - LIVE_CHUNK_SIZE);
+  const limit = Math.max(0, end - start);
+  if (limit <= 0) {
+    liveHasMore = false;
+    updateLoadMoreButton();
+    return;
+  }
+  fetch('/session_log_page?path=' + encodeURIComponent(currentSessionLogPath) + '&start=' + start + '&limit=' + limit + '&live=1')
+    .then(r => r.json())
+    .then(d => {
+      const items = Array.isArray(d.logs) ? d.logs : [];
+      prependLogs(items);
+      liveChunkStart = Number.isInteger(d.start) ? d.start : start;
+      liveHasMore = !!d.has_more;
+      updateLoadMoreButton();
+    })
+    .catch(() => {});
 }
 
 // Coverage
@@ -1648,7 +1847,7 @@ def index():
 
 @app.route('/history')
 def history():
-    out = os.path.join(os.path.dirname(__file__), 'output')
+    out = os.path.join(APP_ROOT, 'output')
     os.makedirs(out, exist_ok=True)
     mds = sorted(glob.glob(os.path.join(out, 'report_*.md')), reverse=True)
     reports = []
@@ -1700,9 +1899,17 @@ def report():
 @app.route('/session_log')
 def session_log():
     path = request.args.get('path', '')
+    live_mode = request.args.get('live', '').strip() in {'1', 'true', 'yes'}
     if not path or not os.path.exists(path):
+        if live_mode and path and test_running and path == running_session_log_path:
+            with running_live_logs_lock:
+                return jsonify({'logs': list(running_live_logs)})
         return jsonify({'logs': []})
     try:
+        if live_mode and test_running and path == running_session_log_path:
+            with running_live_logs_lock:
+                logs = list(running_live_logs)
+            return jsonify({'logs': logs})
         from core.terminal import SessionRecorder
         events = SessionRecorder.load(path)
         logs = []
@@ -1717,16 +1924,70 @@ def session_log():
         return jsonify({'logs': []})
 
 
+@app.route('/session_log_page')
+def session_log_page():
+    path = request.args.get('path', '')
+    live_mode = request.args.get('live', '').strip() in {'1', 'true', 'yes'}
+    if not path:
+        return jsonify({'logs': [], 'start': 0, 'total': 0, 'has_more': False})
+    try:
+        if live_mode and test_running and path == running_session_log_path:
+            with running_live_logs_lock:
+                logs = list(running_live_logs)
+        else:
+            if not os.path.exists(path):
+                return jsonify({'logs': [], 'start': 0, 'total': 0, 'has_more': False})
+            from core.terminal import SessionRecorder
+            events = SessionRecorder.load(path)
+            logs = []
+            for ev in events:
+                t = str(ev.get('type', 'info'))
+                data = str(ev.get('data', ''))
+                if not data.strip():
+                    continue
+                logs.append({'text': data, 'type': t})
+        total = len(logs)
+        limit = request.args.get('limit', type=int) or 200
+        limit = max(1, min(limit, 2000))
+        tail = request.args.get('tail', '').strip() in {'1', 'true', 'yes'}
+        if tail:
+            start = max(0, total - limit)
+        else:
+            start = request.args.get('start', type=int)
+            if start is None:
+                start = 0
+            start = max(0, min(start, total))
+        end = min(total, start + limit)
+        chunk = logs[start:end]
+        return jsonify({
+            'logs': chunk,
+            'start': start,
+            'end': end,
+            'total': total,
+            'has_more': start > 0,
+        })
+    except Exception:
+        return jsonify({'logs': [], 'start': 0, 'total': 0, 'has_more': False})
+
+
+@app.route('/status')
+def status():
+    return jsonify({
+        'running': test_running,
+        'session_log': running_session_log_path or '',
+    })
+
+
 @app.route('/coverage')
 def coverage():
-    hist = os.path.join(os.path.dirname(__file__), 'static_analysis_history.json')
+    hist = os.path.join(APP_ROOT, 'static_analysis_history.json')
     if not os.path.exists(hist):
         return jsonify({'found': False})
     try:
         with open(hist, encoding='utf-8') as f:
             d = json.load(f)
 
-        base_dir = os.path.dirname(__file__)
+        base_dir = APP_ROOT
 
         def normalize_ranges(raw):
             normalized = []
@@ -1873,7 +2134,7 @@ def coverage():
 
 @socketio.on('start_test')
 def on_start(data):
-    global test_running, test_thread, active_sid
+    global test_running, test_thread, active_sid, running_session_id, running_session_log_path, running_live_logs
     if test_running:
         emit('log', {'text': 'A test run is already in progress.', 'type': 'fail'})
         return
@@ -1886,18 +2147,27 @@ def on_start(data):
         else:
             os.environ['V3_MODEL'] = m
     test_running = True
+    running_session_id = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    running_session_log_path = os.path.join(APP_ROOT, 'output', f'session_{running_session_id}.jsonl')
+    with running_live_logs_lock:
+        running_live_logs = []
     sid = request.sid
     active_sid = sid
+    emit('session_ready', {'session_log': running_session_log_path})
     test_thread = socketio.start_background_task(
-        _run, sid, data.get('prompt', ''), data.get('framework')
+        _run, sid, data.get('prompt', ''), data.get('framework'), running_session_id
     )
 
 
 @socketio.on('stop_test')
 def on_stop():
-    global test_running, terminal_executor, active_sid
+    global test_running, terminal_executor, active_sid, running_session_id, running_session_log_path, running_live_logs
     test_running = False
     terminal_executor = None
+    running_session_id = ''
+    running_session_log_path = ''
+    with running_live_logs_lock:
+        running_live_logs = []
     socketio.emit('log', {'text': 'Stop requested.', 'type': 'fail'})
 
 
@@ -1911,7 +2181,7 @@ def on_terminal_cmd(data):
         emit('log', {'text': 'Terminal is read-only after run completes.', 'type': 'dim'})
         return
     if terminal_executor is None:
-        root = os.path.dirname(os.path.abspath(__file__))
+        root = APP_ROOT
         terminal_executor = TerminalExecutor(workdir=root)
     def _run_terminal():
         try:
@@ -1921,8 +2191,8 @@ def on_terminal_cmd(data):
     socketio.start_background_task(_run_terminal)
 
 
-def _run(sid, prompt, custom_fw):
-    global test_running, terminal_executor, active_sid
+def _run(sid, prompt, custom_fw, session_id=None):
+    global test_running, terminal_executor, active_sid, running_session_log_path, running_session_id, running_live_logs
     import builtins, importlib, traceback
     from core.terminal import set_push_hook, set_session_recorder, set_console_echo, SessionRecorder
 
@@ -1930,8 +2200,6 @@ def _run(sid, prompt, custom_fw):
     last_log_flush = time.time()
     LOG_BATCH_MAX = 40
     LOG_FLUSH_SEC = 0.12
-    current_stage_label = None
-    current_stage_start = None
 
     def flush_logs(force=False):
         nonlocal log_buf, last_log_flush
@@ -1944,9 +2212,19 @@ def _run(sid, prompt, custom_fw):
         log_buf.clear()
         last_log_flush = now
 
-    def push(text, t='info'):
+    def push(text, t='info', persist=True):
         if not str(text).strip(): return
-        log_buf.append({'text': str(text), 'type': t})
+        item = {'text': str(text), 'type': t}
+        log_buf.append(item)
+        if persist and recorder:
+            try:
+                recorder.write(t, str(text))
+            except Exception:
+                pass
+        with running_live_logs_lock:
+            running_live_logs.append(item)
+            if len(running_live_logs) > 20000:
+                del running_live_logs[:len(running_live_logs) - 20000]
         flush_logs(False)
 
     orig_print = builtins.print
@@ -1995,15 +2273,6 @@ def _run(sid, prompt, custom_fw):
         set_console_echo(False)
         stage_total = 6
         def stage(done, label):
-            nonlocal current_stage_label, current_stage_start
-            now = time.time()
-            if current_stage_label is not None and current_stage_start is not None:
-                socketio.emit('stage_timing', {
-                    'name': current_stage_label,
-                    'seconds': now - current_stage_start,
-                })
-            current_stage_label = label
-            current_stage_start = now
             flush_logs(True)
             socketio.emit('progress', {
             'done': done,
@@ -2013,12 +2282,15 @@ def _run(sid, prompt, custom_fw):
             'label': label,
         })
 
-        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        ts = session_id or datetime.now().strftime('%Y%m%d_%H%M%S')
         recorder = SessionRecorder(ts)
         session_log_path = recorder.path
+        running_session_id = ts
+        running_session_log_path = session_log_path
         set_session_recorder(recorder)
+        socketio.emit('session_ready', {'session_log': session_log_path})
         def push_hook(ev_type, data):
-            push(data, ev_type if ev_type not in {'rc'} else 'info')
+            push(data, ev_type if ev_type not in {'rc'} else 'info', persist=False)
         set_push_hook(push_hook)
 
         import config
@@ -2034,7 +2306,7 @@ def _run(sid, prompt, custom_fw):
         from core.reporter import Reporter, append_static_analysis
         from core.reporter import append_refined_results, append_overall_summary, merge_reports
 
-        root = os.path.dirname(os.path.abspath(__file__))
+        root = APP_ROOT
         fw = {**DEFAULT_FRAMEWORK, **(custom_fw or {})}
         if prompt:
             fw['test_goals'] = [prompt] + fw.get('test_goals', [])
@@ -2171,12 +2443,24 @@ def _run(sid, prompt, custom_fw):
         push(traceback.format_exc(), 'fail')
         flush_logs(True)
     finally:
-        if current_stage_label is not None and current_stage_start is not None:
-            socketio.emit('stage_timing', {
-                'name': current_stage_label,
-                'seconds': time.time() - current_stage_start,
-            })
         flush_logs(True)
+        # Ensure saved session log matches the full live stream shown during runtime.
+        if session_log_path:
+            try:
+                with running_live_logs_lock:
+                    snapshot = list(running_live_logs)
+                if snapshot:
+                    with open(session_log_path, 'w', encoding='utf-8') as f:
+                        now = time.time()
+                        for i, ev in enumerate(snapshot):
+                            row = {
+                                'ts': now + (i * 1e-6),
+                                'type': ev.get('type', 'info'),
+                                'data': ev.get('text', ''),
+                            }
+                            f.write(json.dumps(row, ensure_ascii=False) + '\n')
+            except Exception:
+                pass
         builtins.print = orig_print
         builtins.input = orig_input
         set_push_hook(None)
@@ -2187,6 +2471,10 @@ def _run(sid, prompt, custom_fw):
         terminal_executor = None
         test_running = False
         active_sid = None
+        running_session_id = ''
+        running_session_log_path = ''
+        with running_live_logs_lock:
+            running_live_logs = []
         socketio.emit('test_done', {
             'success': ok,
             'report_path': rpt_path,
@@ -2199,4 +2487,15 @@ if __name__ == '__main__':
     print('  Stupid Agent Web UI')
     print('  http://localhost:5000')
     print('=' * 50)
+
+    import threading
+    import webbrowser
+    import time
+
+    def open_browser():
+        time.sleep(1)
+        webbrowser.open("http://127.0.0.1:5000")
+
+    threading.Thread(target=open_browser, daemon=True).start()
+
     socketio.run(app, host='0.0.0.0', port=5000, debug=False)
