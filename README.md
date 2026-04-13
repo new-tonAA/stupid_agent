@@ -4,7 +4,8 @@
 
 ```
 stupid_agent/
-├── main.py                  # ★ 入口：在这里填写测试框架，然后运行
+├── main.py                  # ★ 控制台版本入口：在这里填写测试框架，然后运行
+├── web_app.py               # ★ UI版本入口：在这里填写测试框架，然后运行
 ├── config.py                # 配置（API Key、超时等）
 ├── .gitignore               # 配置（Git 忽略文件）
 ├── requirements.txt
@@ -35,7 +36,10 @@ stupid_agent/
 - **JSON + Markdown reporting**
 
 
-## 快速开始
+## 快速使用UI版本
+在Release中找到exe文件下载https://github.com/new-tonAA/stupid_agent/releases ，双击运行即可
+
+## 针对源码快速开始
 ### 0. 找到或安装gcc用于编译cpp (MinGW)（其实可以不做，直接让agent做，但是得把1后的先配好）
 如果本来就有cpp编译器，则寻找：
 ```bash
@@ -86,7 +90,7 @@ conda activate testing_agent
 pip install -r requirements.txt
 ```
 
-### 2. 设置 API Key（请勿泄露，很贵）
+### 2. 设置 API Key（如果是想用UI版本，可以不设置，在UI界面中再设置）
 如果使用claude，则使用OpenRouter（跟以前一样）：
 ```bash
 # Linux / macOS
@@ -111,7 +115,7 @@ V3_MODEL = "gpt-4o"           # 选模型
 
 如果是在 PyCharm 中：Run → Edit Configurations → Environment Variables，添加 `ANTHROPIC_API_KEY`。
 
-### 3. 修改测试框架（`main.py` 顶部的 `TEST_FRAMEWORK`）
+### 3. 修改测试框架（`main.py` 或者 `web_app.py` 顶部的 `TEST_FRAMEWORK`）
 
 把 `TEST_FRAMEWORK` 字典中的字段替换为你自己的被测项目信息即可，其余代码不用动。
 
@@ -120,10 +124,14 @@ V3_MODEL = "gpt-4o"           # 选模型
 ```bash
 python main.py
 ```
+或者UI版本：
+```bash
+python web_app.py
+```
 
 ## 换成自己的被测项目
 
-只需要修改 `main.py` 中的 `TEST_FRAMEWORK`：
+只需要修改 `main.py` 或 `web_app.py` 中的 `TEST_FRAMEWORK`：
 
 ```python
 TEST_FRAMEWORK = {
@@ -151,6 +159,21 @@ TEST_FRAMEWORK = {
   自动判定 PASS/FAIL + LLM 分析失败原因
         ↓
   输出 JSON + Markdown 报告
+```
+
+按照项目流程来讲：
+```
+[EnvAgent]
+     ↓
+[StaticAnalysisAgent]
+     ↓
+[PlannerAgent (LLM)]
+     ↓
+[ExecutorAgent (shell commands)]
+     ↓
+[RefinementAgent (failed tasks loop)]
+     ↓
+[Reporter + static analysis appenders]
 ```
 
 ## Oracle 类型说明
