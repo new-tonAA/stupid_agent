@@ -1719,7 +1719,7 @@ function renderCoverageHeatmap(ranges, totalLines) {
   const cols = Math.max(12, Math.ceil(targetBins / rows));
   const cells = cols * rows;
   const binSize = Math.max(1, Math.ceil(span / cells));
-  const colSize = Math.max(1, Math.ceil(span / cols));
+  const colSize = rows * binSize;
   const density = new Array(cells).fill(0);
   const colWidth = 14;
 
@@ -1739,9 +1739,13 @@ function renderCoverageHeatmap(ranges, totalLines) {
 
   for (let i = 0; i < cells; i++) {
     const cell = document.createElement('div');
-    const hit = density[i] > 0;
+    // Grid fills row-first, but bins should advance by column to match x-axis.
+    const row = Math.floor(i / cols);
+    const col = i % cols;
+    const bin = col * rows + row;
+    const hit = density[bin] > 0;
     cell.className = 'cov-cell' + (hit ? ' cov-hit' : '');
-    const lineStart = minLine + i * binSize;
+    const lineStart = minLine + bin * binSize;
     const lineEnd = Math.min(maxLine, lineStart + binSize - 1);
     cell.title = `${lineStart}-${lineEnd}: ${hit ? 'tested' : 'untested'}`;
     heatmap.appendChild(cell);
@@ -1989,7 +1993,7 @@ def coverage():
 
         base_dir = APP_ROOT
 
-        def normalize_ranges(raw):
+        def normalize_ranges(raw, max_line=0):
             normalized = []
             for item in raw or []:
                 if not isinstance(item, (list, tuple)) or len(item) != 2:
@@ -2000,6 +2004,12 @@ def coverage():
                     continue
                 if s > e:
                     s, e = e, s
+                # Keep ranges inside valid source lines when we know file length.
+                if max_line and max_line > 0:
+                    if e < 1 or s > max_line:
+                        continue
+                    s = max(1, s)
+                    e = min(max_line, e)
                 normalized.append([s, e])
             normalized.sort(key=lambda x: x[0])
             merged = []
@@ -2091,14 +2101,13 @@ def coverage():
         }
         files = []
         for fid in sorted(file_ids):
-            merged = normalize_ranges(ranges_by_file.get(fid, []))
-            fnames = clean_functions(funcs_by_file.get(fid, []))
-            tested_lines = sum((e - s + 1) for s, e in merged)
-
             abs_path = fid if os.path.isabs(fid) else os.path.join(base_dir, fid)
             total_lines = line_count(abs_path) if os.path.exists(abs_path) else 0
+            merged = normalize_ranges(ranges_by_file.get(fid, []), total_lines)
+            fnames = clean_functions(funcs_by_file.get(fid, []))
             if total_lines <= 0 and merged:
                 total_lines = merged[-1][1]
+            tested_lines = sum((e - s + 1) for s, e in merged)
 
             display_name = fid
             files.append({
