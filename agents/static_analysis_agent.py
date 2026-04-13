@@ -212,9 +212,19 @@ class StaticAnalysisAgent:
             json.dump(self._history, f, ensure_ascii=False, indent=2)
         print(f"[StaticAnalysisAgent] 历史已更新：累计分析 {len(unique_ranges)} 个片段")
 
-    def _is_already_analyzed(self, start: int, end: int) -> bool:
+    def _is_already_analyzed(self, start: int, end: int, source_file: str = "") -> bool:
         """检查某行范围是否已分析过（重叠超过50%则跳过）"""
-        for s, e in self._history.get("analyzed_ranges", []):
+        ranges = self._history.get("analyzed_ranges", [])
+        file_id = source_file
+        if file_id:
+            try:
+                if os.path.isabs(file_id):
+                    file_id = os.path.relpath(file_id, self._workdir)
+            except Exception:
+                pass
+            by_file = self._history.get("analyzed_ranges_by_file", {}) or {}
+            ranges = by_file.get(file_id, ranges)
+        for s, e in ranges:
             overlap = min(end, e) - max(start, s)
             span = end - start
             if span > 0 and overlap / span > 0.5:
@@ -246,12 +256,12 @@ class StaticAnalysisAgent:
         print(f"[StaticAnalysisAgent] 识别到 {len(functions)} 个函数")
 
         # 三策略选片段
-        snippets = self._select_snippets(source_lines, functions)
+        snippets = self._select_snippets(source_lines, functions, source_file=src_path)
         print(f"[StaticAnalysisAgent] 本次分析 {len(snippets)} 个片段（跳过历史已分析片段）")
 
         if not snippets:
             print("[StaticAnalysisAgent] 所有片段均已在历史中分析过，尝试随机选取新片段...")
-            snippets = self._random_sample(source_lines, n=4)
+            snippets = self._random_sample(source_lines, n=4, source_file=src_path)
 
         # 逐片段分析
         all_risks = []
@@ -315,7 +325,7 @@ class StaticAnalysisAgent:
     # ── 三策略选片段 ──────────────────────────────────────────────
 
     def _select_snippets(
-        self, lines: list[str], functions: list[dict], max_total: int = 7
+        self, lines: list[str], functions: list[dict], max_total: int = 7, source_file: str = ""
     ) -> list[tuple]:
         """
         三策略选取代码片段：
@@ -332,7 +342,7 @@ class StaticAnalysisAgent:
         for start, end, label, pattern_level in keyword_hits:
             if len(selected) >= max_total // 2:
                 break
-            if self._is_already_analyzed(start, end):
+            if self._is_already_analyzed(start, end, source_file=source_file):
                 continue
             if start in seen_starts:
                 continue
@@ -348,7 +358,7 @@ class StaticAnalysisAgent:
             func_line = rec.get("start_line", 1) - 1
             start = max(0, func_line)
             end = min(len(lines), func_line + 80)
-            if self._is_already_analyzed(start, end):
+            if self._is_already_analyzed(start, end, source_file=source_file):
                 continue
             if start in seen_starts:
                 continue
@@ -359,7 +369,12 @@ class StaticAnalysisAgent:
 
         # ── 策略3：随机补充未覆盖区域 ────────────────────────────
         if len(selected) < max_total:
-            extra = self._random_sample(lines, n=max_total - len(selected), exclude_starts=seen_starts)
+            extra = self._random_sample(
+                lines,
+                n=max_total - len(selected),
+                exclude_starts=seen_starts,
+                source_file=source_file,
+            )
             selected.extend(extra)
 
         return selected[:max_total]
@@ -432,7 +447,8 @@ class StaticAnalysisAgent:
         self, lines: list[str],
         n: int = 3,
         context: int = 60,
-        exclude_starts: set = None
+        exclude_starts: set = None,
+        source_file: str = "",
     ) -> list[tuple]:
         """随机采样未分析过的代码片段"""
         exclude_starts = exclude_starts or set()
@@ -446,7 +462,7 @@ class StaticAnalysisAgent:
             attempts += 1
             start = random.randint(0, total - context)
             end = min(total, start + context)
-            if self._is_already_analyzed(start, end):
+            if self._is_already_analyzed(start, end, source_file=source_file):
                 continue
             if start in exclude_starts:
                 continue
