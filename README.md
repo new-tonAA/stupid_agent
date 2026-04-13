@@ -1,8 +1,9 @@
 # 斯丢匹得软件测试智能体 —— Stupid Tesing Agent
 
 <p align="center">
-  <img src="readme_images/UI.png" width="700"/>
-  <br/>
+  <img src="readme_images/UI.png" width="100%"/>
+</p>
+<p align="center">
   <em>Figure 1: Main interface of the system</em>
 </p>
 
