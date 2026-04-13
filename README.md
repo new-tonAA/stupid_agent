@@ -154,34 +154,12 @@ TEST_FRAMEWORK = {
 
 ## 工作流程
 
-```
-人工填写 TEST_FRAMEWORK
-        ↓
-  PlannerAgent（LLM API，最终建议用 Claude）
-  ——细化为 10~20 个测试任务——
-        ↓
-  ExecutorAgent（subprocess）
-  ——逐条在本地终端执行——
-        ↓
-  自动判定 PASS/FAIL + LLM 分析失败原因
-        ↓
-  输出 JSON + Markdown 报告
-```
-
-按照项目流程来讲：
-```
-[EnvAgent]
-     ↓
-[StaticAnalysisAgent]
-     ↓
-[PlannerAgent (LLM)]
-     ↓
-[ExecutorAgent (shell commands)]
-     ↓
-[RefinementAgent (failed tasks loop)]
-     ↓
-[Reporter + static analysis appenders]
-```
+<p align="center">
+  <img src="readme_images/Pipeline.png" width="100%"/>
+</p>
+<p align="center">
+  <em>Figure 2: Pipeline of the testing process</em>
+</p>
 
 ## Oracle 类型说明
 
