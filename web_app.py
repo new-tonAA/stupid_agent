@@ -40,7 +40,7 @@ HTML = r'''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Testing Agent</title>
+<title>Stupid Agent</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Syne:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
@@ -116,10 +116,11 @@ body{
 }
 .sb-logo{
   width:30px;height:30px;min-width:30px;
+  margin-left:-3px;
   background:linear-gradient(135deg,var(--violet),var(--cyan));
   border-radius:8px;
   display:flex;align-items:center;justify-content:center;
-  font-family:'Syne',sans-serif;font-size:12px;font-weight:800;
+  font-family:'DM Sans',sans-serif;font-size:15px;font-weight:700;
   color:#fff;letter-spacing:-.5px;
   box-shadow:0 0 18px var(--violet-glow),0 2px 8px rgba(0,0,0,.4);
   flex-shrink:0;
@@ -137,10 +138,15 @@ body{
   outline-offset:2px;
 }
 .sb-brand{
-  font-family:'Syne',sans-serif;font-size:13.5px;font-weight:700;
+  font-family:'DM Sans',sans-serif;font-size:16px;font-weight:600;
   color:var(--t0);white-space:nowrap;
-  transition:opacity .2s,transform .2s;
-  letter-spacing:-.2px;
+  display:inline-block;
+  max-width:180px;
+  overflow:hidden;
+  transition:opacity .2s,max-width .25s,margin .25s;
+  letter-spacing:0;
+  line-height:1.4;
+  padding-bottom:2px;
 }
 .sb-toggle{
   margin-left:auto;background:none;border:none;
@@ -152,7 +158,25 @@ body{
 .sb-toggle:hover{background:var(--lift);color:var(--t0)}
 .sb-toggle svg{transition:transform .3s cubic-bezier(.4,0,.2,1)}
 #sidebar.collapsed .sb-toggle svg{transform:rotate(180deg)}
-#sidebar.collapsed .sb-brand{opacity:0;transform:translateX(-8px);pointer-events:none}
+#sidebar.collapsed .sb-brand{
+  opacity:0;
+  pointer-events:none;
+  max-width:0;
+  margin:0;
+}
+#sidebar.collapsed .sb-head{padding:0 14px}
+#sidebar.collapsed .sb-toggle{
+  opacity:0;
+  pointer-events:none;
+  width:0;
+  min-width:0;
+  margin-left:0;
+  padding:0;
+  border-width:0;
+}
+#sidebar.collapsed .sb-logo{
+  margin:0 0 0 -3px;
+}
 
 /* Sidebar body */
 .sb-body{flex:1;overflow-y:auto;overflow-x:hidden;padding:10px 8px}
@@ -296,10 +320,6 @@ body{
   background:var(--deep);border-bottom:1px solid var(--b1);
   display:flex;align-items:center;padding:0 20px;gap:14px;
   flex-shrink:0;
-}
-.topbar-title{
-  font-family:'Syne',sans-serif;font-size:15px;font-weight:700;
-  color:var(--t0);letter-spacing:-.2px;
 }
 .topbar-sub{font-size:11.5px;color:var(--t2);font-family:'JetBrains Mono',monospace}
 
@@ -527,8 +547,8 @@ body{
 <!-- SIDEBAR -->
 <nav id="sidebar">
   <div class="sb-head">
-    <button class="sb-logo" onclick="toggleSidebar()" title="Toggle sidebar">TA</button>
-    <span class="sb-brand">Testing Agent</span>
+    <button class="sb-logo" onclick="toggleSidebar()" title="Toggle sidebar">SA</button>
+    <span class="sb-brand">Stupid Agent</span>
     <button class="sb-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path d="M15 18l-6-6 6-6"/>
@@ -583,10 +603,7 @@ body{
 <div id="main">
   <!-- TOPBAR -->
   <header class="topbar">
-    <div>
-      <div class="topbar-title" id="tb-title">Testing Agent</div>
-      <div class="topbar-sub" id="tb-time">-</div>
-    </div>
+    <div class="topbar-sub" id="tb-time">-</div>
     <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
       <button class="btn-stop" id="btn-stop" onclick="stopTest()">Stop</button>
       <div class="badge idle" id="badge">
@@ -827,8 +844,8 @@ function renderHistory(reports) {
     el.innerHTML =
       '<span class="hist-icon ' + (ok ? 'ok' : 'ng') + '"></span>' +
       '<div class="hist-info">' +
-        '<div class="hist-name">' + escHtml(r.project || 'Report') + '</div>' +
-        '<div class="hist-meta">' + r.time + ' - ' + r.pass_rate + '</div>' +
+        '<div class="hist-name">' + escHtml(r.time || 'Unknown time') + '</div>' +
+        '<div class="hist-meta">' + escHtml(r.project || 'Report') + ' - ' + r.pass_rate + '</div>' +
       '</div>';
     el.onclick = () => onHistClick(el, r, i);
     list.appendChild(el);
@@ -1302,57 +1319,40 @@ def on_stop():
 
 def _run(sid, prompt, custom_fw):
     global test_running
-    import builtins, importlib, traceback, sys
+    import builtins, importlib, traceback
 
     def push(text, t='info'):
         if not str(text).strip(): return
         socketio.emit('log', {'text': str(text), 'type': t}, room=sid)
 
-    class _StreamMirror:
-        def __init__(self, raw, level):
-            self._raw = raw
-            self._level = level
-            self._buf = ""
-
-        def write(self, s):
-            if s is None:
-                return 0
-            text = str(s)
-            if text:
-                self._raw.write(text)
-                self._buf += text
-                while '\n' in self._buf:
-                    line, self._buf = self._buf.split('\n', 1)
-                    if line.strip():
-                        push(line, self._level)
-            return len(text)
-
-        def flush(self):
-            self._raw.flush()
-            if self._buf.strip():
-                push(self._buf, self._level)
-            self._buf = ""
-
-        def isatty(self):
-            return getattr(self._raw, 'isatty', lambda: False)()
-
-        @property
-        def encoding(self):
-            return getattr(self._raw, 'encoding', 'utf-8')
-
-        def fileno(self):
-            return self._raw.fileno()
-
+    orig_print = builtins.print
     orig_input = builtins.input
-    orig_stdout = sys.stdout
-    orig_stderr = sys.stderr
+
+    def p(*a, **kw):
+        sep = kw.get('sep', ' ')
+        end = kw.get('end', '\n')
+        text = sep.join(str(x) for x in a) + ('' if end is None else str(end))
+        for line in text.splitlines():
+            if line.strip():
+                t = 'info'
+                if '[stderr]' in line:
+                    t = 'stderr'
+                elif '[stdout]' in line:
+                    t = 'stdout'
+                elif '[Terminal]' in line or line.strip().startswith('$'):
+                    t = 'cmd'
+                elif 'PASS' in line:
+                    t = 'pass'
+                elif 'FAIL' in line or 'ERROR' in line:
+                    t = 'fail'
+                push(line, t)
+        orig_print(*a, **kw)
 
     def inp(prompt_text=''):
         push(f'[auto-confirm] {prompt_text} -> y', 'muted')
         return 'y'
 
-    sys.stdout = _StreamMirror(orig_stdout, 'stdout')
-    sys.stderr = _StreamMirror(orig_stderr, 'stderr')
+    builtins.print = p
     builtins.input = inp
     rpt_path, ok = None, False
 
@@ -1386,7 +1386,7 @@ def _run(sid, prompt, custom_fw):
             fw['test_goals'] = [prompt] + fw.get('test_goals', [])
 
         push('=' * 48, 'sec')
-        push('  Testing Agent  -  Web Mode', 'sec')
+        push('  Stupid Agent  -  Web Mode', 'sec')
         push('=' * 48, 'sec')
         stage(0, 'Starting...')
 
@@ -1502,13 +1502,7 @@ def _run(sid, prompt, custom_fw):
         push(f'Exception: {e}', 'fail')
         push(traceback.format_exc(), 'fail')
     finally:
-        try:
-            sys.stdout.flush()
-            sys.stderr.flush()
-        except Exception:
-            pass
-        sys.stdout = orig_stdout
-        sys.stderr = orig_stderr
+        builtins.print = orig_print
         builtins.input = orig_input
         test_running = False
         socketio.emit('test_done', {'success': ok, 'report_path': rpt_path}, room=sid)
@@ -1516,8 +1510,7 @@ def _run(sid, prompt, custom_fw):
 
 if __name__ == '__main__':
     print('=' * 50)
-    print('  Testing Agent Web UI')
+    print('  Stupid Agent Web UI')
     print('  http://localhost:5000')
     print('=' * 50)
     socketio.run(app, host='0.0.0.0', port=5000, debug=False)
-
