@@ -157,13 +157,21 @@ class StaticAnalysisAgent:
                 with open(self._history_path, encoding="utf-8") as f:
                     data = json.load(f)
                 analyzed = data.get("analyzed_ranges", [])
+                # Backward-compatible defaults for file-level history.
+                data.setdefault("analyzed_ranges_by_file", {})
+                data.setdefault("analyzed_functions_by_file", {})
                 print(f"[StaticAnalysisAgent] 载入历史记录：已分析 {len(analyzed)} 个代码片段")
                 return data
             except Exception:
                 pass
-        return {"analyzed_ranges": [], "analyzed_functions": []}
+        return {
+            "analyzed_ranges": [],
+            "analyzed_functions": [],
+            "analyzed_ranges_by_file": {},
+            "analyzed_functions_by_file": {},
+        }
 
-    def _save_history(self, new_ranges: list[tuple[int, int]], new_funcs: list[str]):
+    def _save_history(self, new_ranges: list[tuple[int, int]], new_funcs: list[str], source_file: str = ""):
         """保存本次分析的行范围和函数名"""
         existing_ranges = self._history.get("analyzed_ranges", [])
         existing_funcs = self._history.get("analyzed_functions", [])
@@ -172,9 +180,32 @@ class StaticAnalysisAgent:
         # 去重
         unique_ranges = list({(s, e) for s, e in existing_ranges})
         unique_funcs = list(set(existing_funcs))
+
+        # File-level history (for multi-file heatmap and precise traceability).
+        file_id = source_file or self._history.get("source_file", "")
+        if file_id:
+            try:
+                if os.path.isabs(file_id):
+                    file_id = os.path.relpath(file_id, self._workdir)
+            except Exception:
+                pass
+
+        ranges_by_file = self._history.get("analyzed_ranges_by_file", {}) or {}
+        funcs_by_file = self._history.get("analyzed_functions_by_file", {}) or {}
+        if file_id:
+            old_file_ranges = ranges_by_file.get(file_id, [])
+            old_file_funcs = funcs_by_file.get(file_id, [])
+            old_file_ranges.extend(new_ranges)
+            old_file_funcs.extend(new_funcs)
+            ranges_by_file[file_id] = list({(s, e) for s, e in old_file_ranges})
+            funcs_by_file[file_id] = list(set(old_file_funcs))
+
         self._history = {
             "analyzed_ranges": unique_ranges,
             "analyzed_functions": unique_funcs,
+            "analyzed_ranges_by_file": ranges_by_file,
+            "analyzed_functions_by_file": funcs_by_file,
+            "source_file": file_id or self._history.get("source_file", ""),
             "total_sessions": self._history.get("total_sessions", 0) + 1,
         }
         with open(self._history_path, "w", encoding="utf-8") as f:
@@ -236,7 +267,7 @@ class StaticAnalysisAgent:
                 analyzed_funcs.append(func_name)
 
         # 保存历史
-        self._save_history(analyzed_ranges, analyzed_funcs)
+        self._save_history(analyzed_ranges, analyzed_funcs, src_path)
 
         # 综合提炼
         print(f"[StaticAnalysisAgent] 原始风险点 {len(all_risks)} 个，综合提炼中...")
