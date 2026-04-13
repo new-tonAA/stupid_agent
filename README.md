@@ -1,4 +1,4 @@
-# 斯丢匹得软件测试智能体 —— Software Testing Agent
+# 斯丢匹得软件测试智能体 —— Stupid Tesing Agent
 
 ## 项目结构
 
