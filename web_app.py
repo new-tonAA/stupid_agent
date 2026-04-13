@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# web_app.py  —— 软件测试智能体 Web 界面（重构版）
-# 启动：python web_app.py  访问 http://localhost:5000
+# web_app.py - Testing Agent Web UI
+# Run: python web_app.py, then open http://localhost:5000
 
 import os, sys, json, glob, threading, queue, time, importlib
 from datetime import datetime
@@ -18,22 +18,22 @@ test_running = False
 test_thread = None
 
 DEFAULT_FRAMEWORK = {
-    "project_name": "SQLite3 数据库引擎",
-    "language": "C (预编译二进制)",
+    "project_name": "SQLite3 Database Engine",
+    "language": "C (precompiled binary)",
     "source_files": [],
     "binary": "sqlite3",
     "compile_cmd": "",
-    "description": "SQLite3 是世界上使用最广泛的嵌入式关系型数据库引擎，由 C 语言编写。通过命令行工具 sqlite3 可以执行 SQL 语句、管理数据库文件。",
+    "description": "SQLite3 is a widely used embedded relational database engine written in C. The sqlite3 CLI can execute SQL statements and manage database files.",
     "test_goals": [
-        "测试 NULL 值在各种运算和函数中的行为",
-        "测试整数边界值：INT 最大值、最小值",
-        "测试 SQL 约束：UNIQUE、NOT NULL 违反时的行为",
-        "测试事务：BEGIN/COMMIT/ROLLBACK 的正确性",
-        "测试除零：SELECT 1/0",
-        "测试批量插入性能",
-        "测试聚合函数的正确性",
+        "Test NULL behavior in expressions and functions",
+        "Test integer boundary values (max/min)",
+        "Test SQL constraints (UNIQUE / NOT NULL)",
+        "Test transaction semantics (BEGIN/COMMIT/ROLLBACK)",
+        "Test divide-by-zero behavior (SELECT 1/0)",
+        "Test batch insert behavior and performance",
+        "Test aggregate function correctness",
     ],
-    "extra_notes": "sqlite3 命令行工具，使用 :memory: 作为数据库名。",
+    "extra_notes": "Use sqlite3 CLI with :memory: as database name when needed.",
 }
 
 HTML = r'''<!DOCTYPE html>
@@ -88,15 +88,13 @@ body{
     radial-gradient(ellipse 80% 60% at 110% 110%,rgba(56,201,212,0.05) 0%,transparent 50%);
 }
 
-/* ── SCROLLBAR ── */
+/* Scrollbar */
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px}
 ::-webkit-scrollbar-thumb:hover{background:var(--t2)}
 
-/* ══════════════════════════════════════
-   SIDEBAR
-══════════════════════════════════════ */
+/* Sidebar */
 #sidebar{
   width:var(--sidebar);min-width:var(--sidebar);
   background:var(--deep);
@@ -125,6 +123,18 @@ body{
   color:#fff;letter-spacing:-.5px;
   box-shadow:0 0 18px var(--violet-glow),0 2px 8px rgba(0,0,0,.4);
   flex-shrink:0;
+  border:none;
+  cursor:pointer;
+  transition:transform .15s ease, box-shadow .2s ease;
+}
+.sb-logo:hover{
+  transform:translateY(-1px);
+  box-shadow:0 0 20px var(--violet-glow),0 4px 10px rgba(0,0,0,.45);
+}
+.sb-logo:active{transform:translateY(0)}
+.sb-logo:focus-visible{
+  outline:2px solid rgba(56,201,212,.8);
+  outline-offset:2px;
 }
 .sb-brand{
   font-family:'Syne',sans-serif;font-size:13.5px;font-weight:700;
@@ -146,6 +156,7 @@ body{
 
 /* Sidebar body */
 .sb-body{flex:1;overflow-y:auto;overflow-x:hidden;padding:10px 8px}
+#sidebar.collapsed .sb-body{overflow:hidden}
 
 .sb-section-label{
   font-size:9.5px;font-weight:600;
@@ -178,25 +189,108 @@ body{
 .hist-meta{font-size:10.5px;color:var(--t2);font-family:'JetBrains Mono',monospace;margin-top:1px}
 #sidebar.collapsed .hist-info{opacity:0}
 
-/* ── Coverage card at bottom ── */
+/* Coverage card at bottom */
 .sb-footer{
   border-top:1px solid var(--b1);padding:12px 10px;
   transition:opacity .2s;
 }
 #sidebar.collapsed .sb-footer{opacity:0;pointer-events:none}
 .cov-title{font-size:9.5px;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px}
-.cov-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:5px}
-.cov-label{font-size:11px;color:var(--t2)}
+.cov-stats{
+  display:grid;grid-template-columns:1fr 1fr;gap:6px;
+  margin-bottom:8px;
+}
+.cov-stat{
+  background:var(--raised);border:1px solid var(--b0);
+  border-radius:6px;padding:6px;
+}
+.cov-label{font-size:10px;color:var(--t2);margin-bottom:2px}
 .cov-val{font-size:11px;font-weight:600;color:var(--cyan);font-family:'JetBrains Mono',monospace}
-.cov-track{height:3px;background:var(--lift);border-radius:2px;margin-bottom:8px;overflow:hidden}
-.cov-bar{height:100%;background:linear-gradient(90deg,var(--violet),var(--cyan));border-radius:2px;transition:width .6s cubic-bezier(.4,0,.2,1)}
+.cov-sub{font-size:10px;color:var(--t3);font-family:'JetBrains Mono',monospace}
+.cov-hm-wrap{
+  background:var(--raised);border:1px solid var(--b0);
+  border-radius:6px;padding:6px;margin-bottom:8px;
+}
+.cov-file-row{
+  display:flex;align-items:center;gap:6px;
+  margin-bottom:6px;
+}
+.cov-file-sel{
+  flex:1;
+  min-width:0;
+  background:var(--lift);
+  border:1px solid var(--b1);
+  border-radius:5px;
+  color:var(--t0);
+  font-family:'JetBrains Mono',monospace;
+  font-size:10px;
+  padding:4px 6px;
+  outline:none;
+}
+.cov-hm-title{
+  font-size:10px;color:var(--t2);
+  margin-bottom:5px;
+}
+.cov-scroll{
+  overflow-x:auto;
+  overflow-y:hidden;
+  padding-bottom:3px;
+}
+.cov-heatmap{
+  display:grid;
+  grid-template-columns:repeat(12, 12px);
+  gap:3px;
+  margin-bottom:6px;
+  width:max-content;
+}
+.cov-cell{
+  width:12px;
+  aspect-ratio:1/1;
+  border-radius:2px;
+  border:1px solid rgba(255,255,255,0.04);
+  background:var(--lift);
+}
+.cov-cell.cov-hit{background:rgba(74,222,128,0.9)}
+.cov-xaxis{
+  display:grid;
+  grid-template-columns:repeat(12, 12px);
+  gap:3px;
+  width:max-content;
+  min-height:15px;
+  margin-top:2px;
+  padding-top:4px;
+  border-top:1px solid var(--b1);
+}
+.cov-xlbl{
+  font-size:9px;
+  color:var(--t1);
+  text-align:center;
+  font-weight:600;
+  font-family:'JetBrains Mono',monospace;
+  overflow:visible;
+  white-space:nowrap;
+  text-overflow:clip;
+  transform:none;
+}
+.cov-func-title{font-size:10px;color:var(--t2);margin-bottom:5px}
+.cov-func-list{
+  display:flex;flex-wrap:wrap;gap:4px;
+  max-height:56px;overflow:auto;
+}
+.cov-func-item{
+  font-size:10px;line-height:1;
+  padding:4px 5px;border-radius:5px;
+  color:var(--t1);
+  background:var(--lift);
+  border:1px solid var(--b0);
+  font-family:'JetBrains Mono',monospace;
+}
+.cov-empty{font-size:10px;color:var(--t3)}
 
-/* ══════════════════════════════════════
-   MAIN
-══════════════════════════════════════ */
+/* Main */
 #main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
 
-/* ── TOPBAR ── */
+/* Topbar */
 .topbar{
   height:var(--top);min-height:var(--top);
   background:var(--deep);border-bottom:1px solid var(--b1);
@@ -225,7 +319,7 @@ body{
 }
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
 
-/* ── SPLIT ── */
+/* Split panes */
 #split{flex:1;display:flex;overflow:hidden;min-height:0}
 
 /* Log pane */
@@ -345,16 +439,14 @@ body{
 #rpt-scroll li{font-size:12.5px;line-height:1.7;color:var(--t1);margin-bottom:3px}
 #rpt-scroll hr{border:none;border-top:1px solid var(--b1);margin:18px 0}
 
-/* ── RESIZER ── */
+/* Resizer */
 #resizer{
   width:3px;cursor:col-resize;flex-shrink:0;
   background:var(--b1);transition:background .2s;position:relative;
 }
 #resizer:hover,#resizer.active{background:var(--violet)}
 
-/* ══════════════════════════════════════
-   INPUT AREA
-══════════════════════════════════════ */
+/* Input area */
 #input-area{
   border-top:1px solid var(--b1);
   background:var(--deep);padding:14px 18px;flex-shrink:0;
@@ -416,7 +508,7 @@ body{
 .btn-stop:hover{background:var(--red);color:#fff}
 .btn-stop.show{display:block}
 
-/* ── TOAST ── */
+/* Toast */
 #toast{
   position:fixed;bottom:22px;right:22px;
   background:var(--lift);border:1px solid var(--b2);
@@ -432,12 +524,12 @@ body{
 </head>
 <body>
 
-<!-- ── SIDEBAR ── -->
+<!-- SIDEBAR -->
 <nav id="sidebar">
   <div class="sb-head">
-    <div class="sb-logo">TA</div>
+    <button class="sb-logo" onclick="toggleSidebar()" title="Toggle sidebar">TA</button>
     <span class="sb-brand">Testing Agent</span>
-    <button class="sb-toggle" onclick="toggleSidebar()" title="折叠侧边栏">
+    <button class="sb-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path d="M15 18l-6-6 6-6"/>
       </svg>
@@ -445,42 +537,61 @@ body{
   </div>
 
   <div class="sb-body">
-    <div class="sb-section-label">历史记录</div>
-    <div id="hist-list"><div style="font-size:11px;color:var(--t3);padding:8px">加载中...</div></div>
+    <div class="sb-section-label">History</div>
+    <div id="hist-list"><div style="font-size:11px;color:var(--t3);padding:8px">Loading...</div></div>
   </div>
 
-  <!-- 覆盖率卡片 -->
+  <!-- Coverage card -->
   <div class="sb-footer" id="cov-card" style="display:none">
-    <div class="cov-title">静态分析覆盖</div>
-    <div class="cov-row">
-      <span class="cov-label">已分析行数</span>
-      <span class="cov-val" id="cov-lines">—</span>
+    <div class="cov-title">Static Analysis Coverage</div>
+    <div class="cov-stats">
+      <div class="cov-stat">
+        <div class="cov-label">Tested Lines</div>
+        <div class="cov-val" id="cov-lines">-</div>
+      </div>
+      <div class="cov-stat">
+        <div class="cov-label">Tested Functions</div>
+        <div class="cov-val" id="cov-funcs">-</div>
+      </div>
+      <div class="cov-stat" style="grid-column:span 2">
+        <div class="cov-label">Analysis Sessions</div>
+        <div class="cov-val" id="cov-sessions">-</div>
+        <div class="cov-sub" id="cov-range-info">-</div>
+      </div>
     </div>
-    <div class="cov-track"><div class="cov-bar" id="cov-bar" style="width:0%"></div></div>
-    <div class="cov-row">
-      <span class="cov-label">已分析函数</span>
-      <span class="cov-val" id="cov-funcs">—</span>
+
+    <div class="cov-hm-wrap">
+      <div class="cov-hm-title">Line Coverage Heatmap (GitHub style)</div>
+      <div class="cov-file-row">
+        <span class="cov-label">File</span>
+        <select id="cov-file" class="cov-file-sel" onchange="onCoverageFileChange()"></select>
+      </div>
+      <div class="cov-scroll" id="cov-scroll">
+        <div class="cov-heatmap" id="cov-heatmap"></div>
+        <div class="cov-xaxis" id="cov-xaxis"></div>
+      </div>
     </div>
-    <div class="cov-row" style="margin-top:4px">
-      <span class="cov-label">分析轮次</span>
-      <span class="cov-val" id="cov-sessions">—</span>
+
+    <div class="cov-func-title">Tested Functions</div>
+    <div class="cov-func-list" id="cov-func-list">
+      <span class="cov-empty">None</span>
     </div>
   </div>
 </nav>
 
-<!-- ── MAIN ── -->
+<!-- MAIN -->
 <div id="main">
   <!-- TOPBAR -->
   <header class="topbar">
     <div>
-      <div class="topbar-title" id="tb-title">软件测试智能体</div>
-      <div class="topbar-sub" id="tb-time">—</div>
+      <div class="topbar-title" id="tb-title">Testing Agent</div>
+      <div class="topbar-sub" id="tb-time">-</div>
     </div>
     <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
-      <button class="btn-stop" id="btn-stop" onclick="stopTest()">⏹ 停止</button>
+      <button class="btn-stop" id="btn-stop" onclick="stopTest()">Stop</button>
       <div class="badge idle" id="badge">
         <span class="dot-pulse" id="dp" style="display:none"></span>
-        <span id="badge-txt">待机</span>
+        <span id="badge-txt">Idle</span>
       </div>
     </div>
   </header>
@@ -491,32 +602,32 @@ body{
     <div id="log-pane">
       <div class="pane-bar">
         <span class="pane-pip" style="background:var(--violet)"></span>
-        实时日志
+        Live Logs
       </div>
       <div id="log-scroll">
-        <div class="log-line empty">等待测试开始...</div>
+        <div class="log-line empty">Waiting to start test...</div>
       </div>
       <!-- PROGRESS -->
       <div id="prog-wrap">
         <div class="prog-row">
-          <span class="prog-lbl" id="prog-lbl">—</span>
+          <span class="prog-lbl" id="prog-lbl">-</span>
           <span class="prog-pct" id="prog-pct">0%</span>
         </div>
         <div class="prog-track"><div class="prog-bar" id="prog-bar"></div></div>
         <div class="prog-stats">
           <div class="stat">
             <div class="stat-d" style="background:var(--green)"></div>
-            <span style="color:var(--t2)">通过</span>
+            <span style="color:var(--t2)">Passed</span>
             <span id="s-pass" style="color:var(--green);font-weight:600">0</span>
           </div>
           <div class="stat">
             <div class="stat-d" style="background:var(--red)"></div>
-            <span style="color:var(--t2)">失败</span>
+            <span style="color:var(--t2)">Failed</span>
             <span id="s-fail" style="color:var(--red);font-weight:600">0</span>
           </div>
           <div class="stat">
             <div class="stat-d" style="background:var(--t3)"></div>
-            <span style="color:var(--t2)">总计</span>
+            <span style="color:var(--t2)">Total</span>
             <span id="s-total" style="color:var(--t1);font-weight:600">0</span>
           </div>
         </div>
@@ -529,7 +640,7 @@ body{
     <div id="rpt-pane">
       <div class="pane-bar">
         <span class="pane-pip" style="background:var(--cyan)"></span>
-        测试报告
+        Test Report
         <span style="margin-left:auto;font-size:10px;color:var(--t3)" id="rpt-name"></span>
       </div>
       <div id="rpt-scroll">
@@ -540,8 +651,8 @@ body{
               <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
             </svg>
           </div>
-          <p style="font-size:13px;color:var(--t3)">运行测试后报告显示在此</p>
-          <p style="font-size:11px;color:var(--t3)">或点击左侧历史记录查看</p>
+          <p style="font-size:13px;color:var(--t3)">Run a test to see the report here.</p>
+          <p style="font-size:11px;color:var(--t3)">Or click an item from history.</p>
         </div>
       </div>
     </div>
@@ -551,26 +662,26 @@ body{
   <div id="input-area">
     <div class="cfg-row">
       <div class="cfg-grp" style="max-width:180px">
-        <div class="cfg-lbl">API 平台</div>
+        <div class="cfg-lbl">API Provider</div>
         <select class="cfg-sel" id="provider" onchange="onProvider()">
           <option value="openrouter">OpenRouter</option>
           <option value="v3">api.v3.cm</option>
         </select>
       </div>
       <div class="cfg-grp" style="max-width:200px">
-        <div class="cfg-lbl">模型</div>
+        <div class="cfg-lbl">Model</div>
         <select class="cfg-sel" id="model-sel"></select>
       </div>
       <div class="cfg-grp" style="flex:2">
         <div class="cfg-lbl">API Key</div>
-        <input type="password" class="cfg-inp" id="api-key" placeholder="sk-or-... 或 sk-...">
+        <input type="password" class="cfg-inp" id="api-key" placeholder="sk-or-... or sk-...">
       </div>
     </div>
     <div class="inp-row">
-      <textarea id="prompt" placeholder="描述测试目标（留空使用默认配置：SQLite3 数据库引擎）&#10;例：测试一个 C 语言计算器程序，重点测试边界值和异常输入..."></textarea>
+      <textarea id="prompt" placeholder="Describe test goals (leave empty to use defaults for SQLite3).&#10;Example: test a C calculator with focus on edge cases and invalid input."></textarea>
       <button class="btn-run" id="btn-run" onclick="startTest()">
         <svg fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        运行
+        Run
       </button>
     </div>
   </div>
@@ -581,8 +692,10 @@ body{
 <script>
 const io_socket = io();
 let running = false, activeHistIdx = -1;
+let coverageFiles = [];
+let activeCoverageFile = '';
 
-// ── socket events ──────────────────────────────────────────────
+// Socket events
 io_socket.on('connect', () => { loadHistory(); loadCoverage(); });
 
 io_socket.on('log', d => addLog(d.text, d.type || 'info'));
@@ -591,29 +704,29 @@ io_socket.on('progress', d => updateProg(d));
 
 io_socket.on('test_done', d => {
   running = false;
-  setStatus(d.success ? 'done' : 'error', d.success ? '完成' : '异常');
+  setStatus(d.success ? 'done' : 'error', d.success ? 'Completed' : 'Failed');
   document.getElementById('btn-run').disabled = false;
   document.getElementById('btn-stop').classList.remove('show');
   if (d.report_path) showReport(d.report_path);
   loadHistory();
   loadCoverage();
-  toast(d.success ? '✅ 测试完成' : '❌ 测试异常结束');
+  toast(d.success ? 'Test completed' : 'Test finished with errors');
 });
 
-// ── test control ───────────────────────────────────────────────
+// Test control
 function startTest() {
   if (running) return;
   const key = document.getElementById('api-key').value.trim();
-  if (!key) { toast('⚠️ 请填写 API Key'); return; }
+  if (!key) { toast('Please enter API key'); return; }
 
   running = true;
   clearLog();
-  setStatus('running', '运行中');
+  setStatus('running', 'Running');
   document.getElementById('btn-run').disabled = true;
   document.getElementById('btn-stop').classList.add('show');
   document.getElementById('prog-wrap').style.display = 'block';
-  setRptPlaceholder('运行中，稍候...');
-  updateProg({ done:0, total:0, passed:0, failed:0, label:'初始化...' });
+  setRptPlaceholder('Running test, please wait...');
+  updateProg({ done:0, total:0, passed:0, failed:0, label:'Initializing...' });
 
   io_socket.emit('start_test', {
     api_key: key,
@@ -625,10 +738,10 @@ function startTest() {
 
 function stopTest() {
   io_socket.emit('stop_test');
-  toast('正在停止...');
+  toast('Stopping...');
 }
 
-// ── log ────────────────────────────────────────────────────────
+// Logs
 function addLog(text, type) {
   const scr = document.getElementById('log-scroll');
   const ph = scr.querySelector('.log-line.empty');
@@ -641,13 +754,13 @@ function addLog(text, type) {
 }
 
 function classOf(text, type) {
-  if (type === 'pass' || text.includes('✅') || /\bPASS\b/.test(text)) return 'ok';
-  if (type === 'fail' || text.includes('❌') || /\bFAIL\b|ERROR/.test(text)) return 'fail';
+  if (type === 'pass' || /\bPASS\b/.test(text)) return 'ok';
+  if (type === 'fail' || /\bFAIL\b|ERROR/.test(text)) return 'fail';
   if (type === 'section' || (text.includes('[Step') || /^={3,}/.test(text.trim()))) return 'sec';
   if (type === 'cmd' || text.includes('$ ') || text.includes('[Terminal]')) return 'cmd';
   if (type === 'stderr' || text.includes('[stderr]')) return 'err';
   if (type === 'stdout' || text.includes('[stdout]')) return 'out';
-  if (type === 'muted' || text.includes('[自动确认]')) return 'dim';
+  if (type === 'muted' || text.includes('[auto-confirm]')) return 'dim';
   return 'info';
 }
 
@@ -655,7 +768,7 @@ function clearLog() {
   document.getElementById('log-scroll').innerHTML = '';
 }
 
-// ── progress ───────────────────────────────────────────────────
+// Progress
 function updateProg(d) {
   const pct = d.total > 0 ? Math.round(d.done / d.total * 100) : 0;
   document.getElementById('prog-bar').style.width = pct + '%';
@@ -666,7 +779,7 @@ function updateProg(d) {
   document.getElementById('s-total').textContent = d.total || 0;
 }
 
-// ── status badge ───────────────────────────────────────────────
+// Status badge
 function setStatus(state, txt) {
   const b = document.getElementById('badge');
   const dp = document.getElementById('dp');
@@ -675,7 +788,7 @@ function setStatus(state, txt) {
   dp.style.display = state === 'running' ? 'block' : 'none';
 }
 
-// ── report ─────────────────────────────────────────────────────
+// Report
 function showReport(path) {
   fetch('/report?path=' + encodeURIComponent(path))
     .then(r => r.json()).then(d => {
@@ -692,7 +805,7 @@ function setRptPlaceholder(msg) {
     '<div class="rpt-ph"><p style="font-size:13px;color:var(--t3)">' + msg + '</p></div>';
 }
 
-// ── history ────────────────────────────────────────────────────
+// History
 function loadHistory() {
   fetch('/history').then(r => r.json()).then(d => renderHistory(d.reports));
 }
@@ -701,7 +814,7 @@ function renderHistory(reports) {
   const list = document.getElementById('hist-list');
   list.innerHTML = '';
   if (!reports.length) {
-    list.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px">暂无历史记录</div>';
+    list.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px">No history yet</div>';
     return;
   }
   reports.forEach((r, i) => {
@@ -714,25 +827,25 @@ function renderHistory(reports) {
     el.innerHTML =
       '<span class="hist-icon ' + (ok ? 'ok' : 'ng') + '"></span>' +
       '<div class="hist-info">' +
-        '<div class="hist-name">' + escHtml(r.project || '报告') + '</div>' +
-        '<div class="hist-meta">' + r.time + ' · ' + r.pass_rate + '</div>' +
+        '<div class="hist-name">' + escHtml(r.project || 'Report') + '</div>' +
+        '<div class="hist-meta">' + r.time + ' - ' + r.pass_rate + '</div>' +
       '</div>';
     el.onclick = () => onHistClick(el, r, i);
     list.appendChild(el);
   });
-  // 自动加载最新
+  // Auto-load latest report
   if (reports.length && !running) showReport(reports[0].md_path);
 }
 
 function onHistClick(el, r, i) {
   if (activeHistIdx === i) {
-    // 再次点击 → 取消，跳到最新/运行中状态
+    // Click active item again to reset selection to latest
     activeHistIdx = -1;
     document.querySelectorAll('.hist-item').forEach((x,j) => {
       x.classList.toggle('active', j === 0);
     });
     if (running) {
-      setRptPlaceholder('测试运行中，报告完成后显示...');
+      setRptPlaceholder('Test is still running. Report will appear when finished.');
     } else {
       const first = document.querySelector('.hist-item');
       if (first) showReport(first.dataset.path);
@@ -745,35 +858,161 @@ function onHistClick(el, r, i) {
   showReport(r.md_path);
 }
 
-// ── coverage ───────────────────────────────────────────────────
+// Coverage
 function loadCoverage() {
   fetch('/coverage').then(r => r.json()).then(d => {
     if (!d.found) return;
     document.getElementById('cov-card').style.display = 'block';
-    document.getElementById('cov-lines').textContent = d.lines.toLocaleString();
-    document.getElementById('cov-funcs').textContent = d.funcs;
-    document.getElementById('cov-sessions').textContent = d.sessions;
-    const pct = Math.min(100, d.lines / 2300 * 100); // ~230k lines total → per snippet
-    document.getElementById('cov-bar').style.width = pct + '%';
+    document.getElementById('cov-sessions').textContent = d.sessions ?? 0;
+    coverageFiles = d.files || [];
+    syncCoverageFileSelector(coverageFiles);
+
+    if (!coverageFiles.length) {
+      document.getElementById('cov-lines').textContent = '0';
+      document.getElementById('cov-funcs').textContent = '0';
+      document.getElementById('cov-range-info').textContent = 'No line ranges';
+      renderCoverageHeatmap([], 0);
+      renderCoverageFunctions([]);
+      return;
+    }
+
+    const stillExists = coverageFiles.some(f => f.id === activeCoverageFile);
+    const nextId = stillExists ? activeCoverageFile : coverageFiles[0].id;
+    setCoverageFile(nextId);
   }).catch(() => {});
 }
 
-// ── sidebar ────────────────────────────────────────────────────
+function syncCoverageFileSelector(files) {
+  const sel = document.getElementById('cov-file');
+  const current = sel.value;
+  sel.innerHTML = '';
+  files.forEach(f => {
+    const opt = document.createElement('option');
+    opt.value = f.id;
+    opt.textContent = f.display_name || f.id;
+    sel.appendChild(opt);
+  });
+  if (files.some(f => f.id === current)) {
+    sel.value = current;
+  }
+}
+
+function onCoverageFileChange() {
+  setCoverageFile(document.getElementById('cov-file').value);
+}
+
+function setCoverageFile(fileId) {
+  activeCoverageFile = fileId;
+  const sel = document.getElementById('cov-file');
+  if (sel.value !== fileId) sel.value = fileId;
+  const file = coverageFiles.find(f => f.id === fileId);
+  if (!file) return;
+
+  document.getElementById('cov-lines').textContent = (file.tested_lines || 0).toLocaleString();
+  document.getElementById('cov-funcs').textContent = (file.functions || []).length;
+  document.getElementById('cov-range-info').textContent = formatRangeInfo(file.ranges || [], file.total_lines || 0);
+  renderCoverageHeatmap(file.ranges || [], file.total_lines || 0);
+  renderCoverageFunctions(file.functions || []);
+}
+
+function formatRangeInfo(ranges, totalLines) {
+  if (!ranges.length) {
+    if (totalLines > 0) return `Range 1-${totalLines} | 0 segments`;
+    return 'No line ranges';
+  }
+  const first = ranges[0];
+  const last = ranges[ranges.length - 1];
+  return `Range ${first[0]}-${last[1]} | ${ranges.length} segments`;
+}
+
+function renderCoverageFunctions(funcs) {
+  const wrap = document.getElementById('cov-func-list');
+  wrap.innerHTML = '';
+  if (!funcs.length) {
+    wrap.innerHTML = '<span class="cov-empty">None</span>';
+    return;
+  }
+  funcs.forEach(name => {
+    const el = document.createElement('span');
+    el.className = 'cov-func-item';
+    el.textContent = name;
+    el.title = name;
+    wrap.appendChild(el);
+  });
+}
+
+function renderCoverageHeatmap(ranges, totalLines) {
+  const heatmap = document.getElementById('cov-heatmap');
+  const xaxis = document.getElementById('cov-xaxis');
+  const rows = 7;
+  heatmap.innerHTML = '';
+  xaxis.innerHTML = '';
+
+  const normalized = ranges
+    .map(r => [Math.min(r[0], r[1]), Math.max(r[0], r[1])])
+    .sort((a, b) => a[0] - b[0]);
+  const minLine = 1;
+  const rangedMax = normalized.length ? normalized[normalized.length - 1][1] : 0;
+  const maxLine = Math.max(totalLines || 0, rangedMax, 1);
+  const span = Math.max(1, maxLine - minLine + 1);
+  const targetBins = Math.max(84, Math.min(1260, Math.ceil(span / 250)));
+  const cols = Math.max(12, Math.ceil(targetBins / rows));
+  const cells = cols * rows;
+  const binSize = Math.max(1, Math.ceil(span / cells));
+  const colSize = Math.max(1, Math.ceil(span / cols));
+  const density = new Array(cells).fill(0);
+  const colWidth = 14;
+
+  heatmap.style.gridTemplateColumns = `repeat(${cols}, ${colWidth}px)`;
+  xaxis.style.gridTemplateColumns = `repeat(${cols}, ${colWidth}px)`;
+
+  normalized.forEach(([start, end]) => {
+    const sb = Math.floor((start - minLine) / binSize);
+    const eb = Math.min(cells - 1, Math.floor((end - minLine) / binSize));
+    for (let b = sb; b <= eb; b++) {
+      const bStart = minLine + b * binSize;
+      const bEnd = bStart + binSize - 1;
+      const overlap = Math.max(0, Math.min(end, bEnd) - Math.max(start, bStart) + 1);
+      density[b] += overlap;
+    }
+  });
+
+  for (let i = 0; i < cells; i++) {
+    const cell = document.createElement('div');
+    const hit = density[i] > 0;
+    cell.className = 'cov-cell' + (hit ? ' cov-hit' : '');
+    const lineStart = minLine + i * binSize;
+    const lineEnd = Math.min(maxLine, lineStart + binSize - 1);
+    cell.title = `${lineStart}-${lineEnd}: ${hit ? 'tested' : 'untested'}`;
+    heatmap.appendChild(cell);
+  }
+
+  const step = 3;
+  for (let c = 0; c < cols; c++) {
+    const tick = document.createElement('div');
+    tick.className = 'cov-xlbl';
+    const showLabel = (c % step === 0) || (c === cols - 1);
+    tick.textContent = showLabel ? (minLine + c * colSize).toLocaleString() : '';
+    xaxis.appendChild(tick);
+  }
+}
+
+// Sidebar
 function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('collapsed');
 }
 
-// ── provider ───────────────────────────────────────────────────
+// Provider
 function onProvider() {
   const p = document.getElementById('provider').value;
   const sel = document.getElementById('model-sel');
   sel.innerHTML = '';
   const opts = p === 'openrouter'
-    ? [['anthropic/claude-sonnet-4-5','Claude Sonnet 4.5'],
+    ? [['anthropic/claude-sonnet-4-6','Claude Sonnet 4.6'],
        ['anthropic/claude-3-5-haiku','Claude 3.5 Haiku'],
        ['anthropic/claude-opus-4','Claude Opus 4']]
     : [['gpt-4o','GPT-4o'],['gpt-4o-mini','GPT-4o mini'],
-       ['claude-sonnet-4-5','Claude Sonnet'],
+       ['claude-sonnet-4-6','Claude Sonnet 4.6'],
        ['qwen3-vl-plus','Qwen3-VL-Plus'],
        ['deepseek-chat','DeepSeek Chat']];
   opts.forEach(([v,l]) => {
@@ -784,14 +1023,14 @@ function onProvider() {
 }
 onProvider();
 
-// ── time ───────────────────────────────────────────────────────
+// Clock
 function tick() {
   document.getElementById('tb-time').textContent =
     new Date().toLocaleString('zh-CN',{hour12:false});
 }
 setInterval(tick, 1000); tick();
 
-// ── toast ──────────────────────────────────────────────────────
+// Toast
 let toastTimer;
 function toast(msg) {
   const t = document.getElementById('toast');
@@ -800,7 +1039,7 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.classList.remove('show'), 3000);
 }
 
-// ── resizer ────────────────────────────────────────────────────
+// Resizer
 (()=>{
   const r = document.getElementById('resizer');
   const rp = document.getElementById('rpt-pane');
@@ -830,7 +1069,7 @@ function escHtml(s){
 </html>'''
 
 
-# ── Flask 路由 ──────────────────────────────────────────────────────────
+# Flask routes
 
 @app.route('/')
 def index():
@@ -885,27 +1124,157 @@ def coverage():
     try:
         with open(hist, encoding='utf-8') as f:
             d = json.load(f)
-        ranges = d.get('analyzed_ranges', [])
-        funcs = d.get('analyzed_functions', [])
+
+        base_dir = os.path.dirname(__file__)
+
+        def normalize_ranges(raw):
+            normalized = []
+            for item in raw or []:
+                if not isinstance(item, (list, tuple)) or len(item) != 2:
+                    continue
+                try:
+                    s = int(item[0]); e = int(item[1])
+                except Exception:
+                    continue
+                if s > e:
+                    s, e = e, s
+                normalized.append([s, e])
+            normalized.sort(key=lambda x: x[0])
+            merged = []
+            for s, e in normalized:
+                if not merged or s > merged[-1][1] + 1:
+                    merged.append([s, e])
+                else:
+                    merged[-1][1] = max(merged[-1][1], e)
+            return merged
+
+        def clean_functions(raw):
+            out = []
+            seen = set()
+            for fn in raw or []:
+                if not isinstance(fn, str):
+                    continue
+                fn = fn.strip()
+                if not fn or fn in seen:
+                    continue
+                seen.add(fn)
+                out.append(fn)
+            return out
+
+        def line_count(path):
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    return sum(1 for _ in f)
+            except Exception:
+                return 0
+
+        default_file = (
+            d.get('source_file')
+            or d.get('primary_source_file')
+            or d.get('target_source_file')
+            or 'global'
+        )
+
+        ranges_by_file = {}
+        funcs_by_file = {}
+
+        raw_ranges_by_file = d.get('analyzed_ranges_by_file', {})
+        if isinstance(raw_ranges_by_file, dict) and raw_ranges_by_file:
+            ranges_by_file = {str(k): v for k, v in raw_ranges_by_file.items()}
+        else:
+            ranges_by_file = {default_file: d.get('analyzed_ranges', [])}
+
+        raw_funcs_by_file = d.get('analyzed_functions_by_file', {})
+        if isinstance(raw_funcs_by_file, dict) and raw_funcs_by_file:
+            funcs_by_file = {str(k): v for k, v in raw_funcs_by_file.items()}
+        else:
+            funcs_by_file = {default_file: d.get('analyzed_functions', [])}
+
+        code_exts = {'.c', '.h'}
+        scan_dirs = ['sqlite3_src']
+        discovered = set()
+        for rel in scan_dirs:
+            root = os.path.join(base_dir, rel)
+            if not os.path.isdir(root):
+                continue
+            for r, dirs, files in os.walk(root):
+                dirs[:] = [x for x in dirs if x not in {'.git', '__pycache__', '.idea', 'output'}]
+                for name in files:
+                    ext = os.path.splitext(name)[1].lower()
+                    if ext not in code_exts:
+                        continue
+                    p = os.path.join(r, name)
+                    discovered.add(os.path.relpath(p, base_dir))
+
+        # Legacy history may not include file-level keys. If so, try mapping to sqlite3.c.
+        if default_file == 'global':
+            sqlite_candidates = [
+                os.path.join(base_dir, 'sqlite3.c'),
+                os.path.join(base_dir, 'sqlite3_src', 'sqlite3.c'),
+                os.path.join(base_dir, 'sqlite3_src', 'sqlite-amalgamation-3460100', 'sqlite3.c'),
+            ]
+            mapped = None
+            for p in sqlite_candidates:
+                if os.path.isfile(p):
+                    mapped = os.path.relpath(p, base_dir)
+                    break
+            if mapped:
+                ranges_by_file = {mapped: d.get('analyzed_ranges', [])}
+                funcs_by_file = {mapped: d.get('analyzed_functions', [])}
+
+        file_ids = set(ranges_by_file.keys()) | set(funcs_by_file.keys()) | discovered
+        file_ids = {
+            fid for fid in file_ids
+            if os.path.splitext(str(fid))[1].lower() in code_exts
+        }
+        files = []
+        for fid in sorted(file_ids):
+            merged = normalize_ranges(ranges_by_file.get(fid, []))
+            fnames = clean_functions(funcs_by_file.get(fid, []))
+            tested_lines = sum((e - s + 1) for s, e in merged)
+
+            abs_path = fid if os.path.isabs(fid) else os.path.join(base_dir, fid)
+            total_lines = line_count(abs_path) if os.path.exists(abs_path) else 0
+            if total_lines <= 0 and merged:
+                total_lines = merged[-1][1]
+
+            display_name = fid
+            files.append({
+                'id': fid,
+                'display_name': display_name,
+                'path': fid,
+                'ranges': merged,
+                'functions': fnames,
+                'tested_lines': tested_lines,
+                'total_lines': total_lines,
+            })
+
+        files.sort(key=lambda x: (x['tested_lines'] == 0, x['display_name'].lower()))
+
         sessions = d.get('total_sessions', 0)
-        total_lines = sum(max(0, e - s) for s, e in ranges)
+        total_lines = sum(f['tested_lines'] for f in files)
+        total_funcs = sum(len(f['functions']) for f in files if f['functions'])
+        first_file = files[0] if files else {'ranges': [], 'functions': []}
         return jsonify({
             'found': True,
             'lines': total_lines,
-            'funcs': len(funcs),
+            'funcs': total_funcs,
             'sessions': sessions,
+            'ranges': first_file['ranges'],
+            'function_names': first_file['functions'],
+            'files': files,
         })
     except:
         return jsonify({'found': False})
 
 
-# ── SocketIO ────────────────────────────────────────────────────────────
+# SocketIO handlers
 
 @socketio.on('start_test')
 def on_start(data):
     global test_running, test_thread
     if test_running:
-        emit('log', {'text': '已有测试在运行', 'type': 'fail'})
+        emit('log', {'text': 'A test run is already in progress.', 'type': 'fail'})
         return
     os.environ['ANTHROPIC_API_KEY'] = data.get('api_key', '')
     os.environ['LLM_PROVIDER'] = data.get('provider', 'openrouter')
@@ -928,34 +1297,76 @@ def on_start(data):
 def on_stop():
     global test_running
     test_running = False
-    socketio.emit('log', {'text': '⏹ 已停止', 'type': 'fail'})
+    socketio.emit('log', {'text': 'Stop requested.', 'type': 'fail'})
 
 
 def _run(sid, prompt, custom_fw):
     global test_running
-    import builtins, importlib, traceback
+    import builtins, importlib, traceback, sys
 
     def push(text, t='info'):
         if not str(text).strip(): return
         socketio.emit('log', {'text': str(text), 'type': t}, room=sid)
 
-    orig_print = builtins.print
-    orig_input = builtins.input
+    class _StreamMirror:
+        def __init__(self, raw, level):
+            self._raw = raw
+            self._level = level
+            self._buf = ""
 
-    def p(*a, **kw):
-        text = ' '.join(str(x) for x in a)
-        push(text)
-        orig_print(*a, **kw)
+        def write(self, s):
+            if s is None:
+                return 0
+            text = str(s)
+            if text:
+                self._raw.write(text)
+                self._buf += text
+                while '\n' in self._buf:
+                    line, self._buf = self._buf.split('\n', 1)
+                    if line.strip():
+                        push(line, self._level)
+            return len(text)
+
+        def flush(self):
+            self._raw.flush()
+            if self._buf.strip():
+                push(self._buf, self._level)
+            self._buf = ""
+
+        def isatty(self):
+            return getattr(self._raw, 'isatty', lambda: False)()
+
+        @property
+        def encoding(self):
+            return getattr(self._raw, 'encoding', 'utf-8')
+
+        def fileno(self):
+            return self._raw.fileno()
+
+    orig_input = builtins.input
+    orig_stdout = sys.stdout
+    orig_stderr = sys.stderr
 
     def inp(prompt_text=''):
-        push(f'[自动确认] {prompt_text} → y', 'muted')
+        push(f'[auto-confirm] {prompt_text} -> y', 'muted')
         return 'y'
 
-    builtins.print = p
+    sys.stdout = _StreamMirror(orig_stdout, 'stdout')
+    sys.stderr = _StreamMirror(orig_stderr, 'stderr')
     builtins.input = inp
     rpt_path, ok = None, False
 
     try:
+        stage_total = 6
+        def stage(done, label):
+            socketio.emit('progress', {
+                'done': done,
+                'total': stage_total,
+                'passed': 0,
+                'failed': 0,
+                'label': label,
+            }, room=sid)
+
         import config
         importlib.reload(config)
         config.ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
@@ -975,37 +1386,45 @@ def _run(sid, prompt, custom_fw):
             fw['test_goals'] = [prompt] + fw.get('test_goals', [])
 
         push('=' * 48, 'sec')
-        push('  Testing Agent  ·  Web Mode', 'sec')
+        push('  Testing Agent  -  Web Mode', 'sec')
         push('=' * 48, 'sec')
+        stage(0, 'Starting...')
 
         # EnvAgent
-        push('\n[Step 1/6] 探测系统环境...', 'sec')
+        push('\n[Step 1/6] Detecting environment...', 'sec')
+        stage(1, 'Step 1/6 - Detecting environment')
         framework = EnvAgent(workdir=root).detect_and_fix(fw)
 
         if not test_running: return
 
-        # 编译
+        # Compile
+        stage(2, 'Step 2/6 - Compile check')
         if framework.get('compile_cmd'):
-            push('\n[Step 2/6] 编译...', 'sec')
+            push('\n[Step 2/6] Compiling...', 'sec')
             from core.terminal import TerminalExecutor
             res = TerminalExecutor(workdir=root).run(framework['compile_cmd'])
-            push(('✅ 编译成功' if res.success else '❌ 编译失败: ' + res.stderr),
+            push(('Compile succeeded' if res.success else 'Compile failed: ' + res.stderr),
                  'pass' if res.success else 'fail')
+        else:
+            push('[Step 2/6] Compile skipped (no compile_cmd)', 'dim')
 
-        # 静态分析
-        push('\n[Step 3/6] 静态代码分析...', 'sec')
+        # Static analysis
+        push('\n[Step 3/6] Running static analysis...', 'sec')
+        stage(3, 'Step 3/6 - Static analysis')
         static_rpt = StaticAnalysisAgent(workdir=root).analyze(framework)
 
         if not test_running: return
 
         # Plan
-        push('\n[Step 4/6] 生成测试任务...', 'sec')
+        push('\n[Step 4/6] Generating test tasks...', 'sec')
+        stage(4, 'Step 4/6 - Generating tasks')
         tasks = PlannerAgent().plan(framework, static_report=static_rpt)
         total = len(tasks)
-        socketio.emit('progress', {'done':0,'total':total,'passed':0,'failed':0,'label':f'准备 {total} 个任务'}, room=sid)
+        socketio.emit('progress', {'done':0,'total':total,'passed':0,'failed':0,'label':f'Preparing {total} tasks'}, room=sid)
 
         # Execute
-        push(f'\n[Step 5/6] 执行测试（{total} 个）...', 'sec')
+        push(f'\n[Step 5/6] Executing tests ({total} tasks)...', 'sec')
+        stage(5, f'Step 5/6 - Executing {total} tasks')
         executor = ExecutorAgent(workdir=root)
         report = TestReport(project_name=framework['project_name'], total=total)
         executor._tool_path = framework.get('_tool_path', '')
@@ -1016,19 +1435,20 @@ def _run(sid, prompt, custom_fw):
             res = executor._run_task(task)
             report.results.append(res)
             if res.passed:
-                report.passed += 1; push('  ✅ PASS', 'pass')
+                report.passed += 1; push('  PASS', 'pass')
             elif res.verdict == 'ERROR':
-                report.errors += 1; push('  ⚠️ ERROR', 'fail')
+                report.errors += 1; push('  ERROR', 'fail')
             else:
-                report.failed += 1; push('  ❌ FAIL', 'fail')
+                report.failed += 1; push('  FAIL', 'fail')
             socketio.emit('progress', {
                 'done':i+1,'total':total,
                 'passed':report.passed,'failed':report.failed,
-                'label':f'{i+1}/{total} · {task.task_id}'
+                'label':f'{i+1}/{total} - {task.task_id}'
             }, room=sid)
 
         # Refine
-        push('\n[Step 6/6] 精化测试...', 'sec')
+        push('\n[Step 6/6] Refining failed tests...', 'sec')
+        stage(6, 'Step 6/6 - Refining failed tests')
         all_rpts, all_tasks, bugs = [], [], []
         cur = report
         refiner = RefinementAgent()
@@ -1037,23 +1457,30 @@ def _run(sid, prompt, custom_fw):
         for rnd in range(1, 3):
             if not test_running: break
             fails = [r for r in cur.results if r.verdict in ('FAIL','ERROR')]
-            if not fails: push(f'第{rnd}轮无失败，停止精化', 'pass'); break
-            push(f'\n精化第 {rnd} 轮（{len(fails)} 个失败）...', 'sec')
+            if not fails:
+                push(f'No failures in refine round {rnd}; stop refining.', 'pass')
+                break
+            push(f'\nRefine round {rnd} ({len(fails)} failing tasks)...', 'sec')
             rtasks = refiner.refine(cur, framework)
             ntasks = [t for t in rtasks if not any(c in tested for c in t.commands)]
-            if not ntasks: push('无新任务', 'dim'); break
-            rr = TestReport(project_name=framework['project_name']+f'(精化{rnd})', total=len(ntasks))
+            if not ntasks:
+                push('No new tasks generated.', 'dim')
+                break
+            rr = TestReport(project_name=framework['project_name']+f'(refine{rnd})', total=len(ntasks))
             executor._tool_path = framework.get('_tool_path', '')
             for i, t in enumerate(ntasks):
                 if not test_running: break
                 push(f'  [{i+1}/{len(ntasks)}] {t.task_id}: {t.description[:50]}')
                 res = executor._run_task(t)
                 rr.results.append(res)
-                if res.passed: rr.passed += 1; push('  ✅ PASS','pass')
+                if res.passed:
+                    rr.passed += 1
+                    push('  PASS', 'pass')
                 else:
-                    rr.failed += 1; push('  ❌ FAIL','fail')
+                    rr.failed += 1
+                    push('  FAIL', 'fail')
                     al = (res.analysis or '').lower()
-                    if not any(k in al for k in ['未发现缺陷','符合预期','正常行为']):
+                    if not any(k in al for k in ['no defect', 'as expected', 'normal behavior']):
                         bugs.append(res)
                 for c in t.commands: tested.add(c)
             all_rpts.append(rr); all_tasks.extend(ntasks); cur = rr
@@ -1068,14 +1495,20 @@ def _run(sid, prompt, custom_fw):
 
         rpt_path = mp; ok = True
         push('\n' + '=' * 48, 'sec')
-        push(f'  完成！通过率 {final.pass_rate:.1f}%', 'pass')
+        push(f'  Completed. Pass rate: {final.pass_rate:.1f}%', 'pass')
         push('=' * 48, 'sec')
 
     except Exception as e:
-        push(f'异常: {e}', 'fail')
+        push(f'Exception: {e}', 'fail')
         push(traceback.format_exc(), 'fail')
     finally:
-        builtins.print = orig_print
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        sys.stdout = orig_stdout
+        sys.stderr = orig_stderr
         builtins.input = orig_input
         test_running = False
         socketio.emit('test_done', {'success': ok, 'report_path': rpt_path}, room=sid)
@@ -1083,7 +1516,8 @@ def _run(sid, prompt, custom_fw):
 
 if __name__ == '__main__':
     print('=' * 50)
-    print('  软件测试智能体 Web 界面')
+    print('  Testing Agent Web UI')
     print('  http://localhost:5000')
     print('=' * 50)
     socketio.run(app, host='0.0.0.0', port=5000, debug=False)
+
