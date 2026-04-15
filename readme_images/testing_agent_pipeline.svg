@@ -1,0 +1,201 @@
+<svg viewBox="0 0 800 540" xmlns="http://www.w3.org/2000/svg" font-family="'Courier New', monospace">
+  <defs>
+    <marker id="a" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#6c6c8a"/></marker>
+    <marker id="av" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#7c6af7"/></marker>
+    <marker id="ag" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#4ade80"/></marker>
+    <marker id="ar" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#f87171"/></marker>
+    <marker id="ac" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#38c9d4"/></marker>
+  </defs>
+
+  <!-- BG -->
+  <rect width="800" height="540" fill="#0d0f18" rx="16"/>
+
+  <!-- Title -->
+  <text x="400" y="38" text-anchor="middle" font-size="16" font-weight="700" fill="#e0e2f0" font-family="sans-serif" letter-spacing="-0.5">软件测试智能体  ·  技术路线图</text>
+  <text x="400" y="56" text-anchor="middle" font-size="10" fill="#3a3f60" font-family="sans-serif">LLM-Driven Multi-Agent Software Testing Pipeline  ·  面向 C 语言程序的系统级功能测试</text>
+
+  <!-- ═══ LANE BACKGROUNDS ═══ -->
+  <rect x="16"  y="70" width="110" height="390" rx="10" fill="#16192610" stroke="#2e315040" stroke-width="1"/>
+  <rect x="138" y="70" width="118" height="390" rx="10" fill="#7c6af710" stroke="#7c6af730" stroke-width="1"/>
+  <rect x="268" y="70" width="118" height="390" rx="10" fill="#38c9d410" stroke="#38c9d430" stroke-width="1"/>
+  <rect x="398" y="70" width="118" height="390" rx="10" fill="#a78bfa10" stroke="#a78bfa30" stroke-width="1"/>
+  <rect x="528" y="70" width="118" height="390" rx="10" fill="#4ade8010" stroke="#4ade8030" stroke-width="1"/>
+  <rect x="658" y="70" width="126" height="390" rx="10" fill="#f8717110" stroke="#f8717130" stroke-width="1"/>
+
+  <!-- Lane labels -->
+  <text x="71"  y="85" text-anchor="middle" font-size="8" fill="#4a4f70" font-family="sans-serif" letter-spacing="0.05em">INPUT</text>
+  <text x="197" y="85" text-anchor="middle" font-size="8" fill="#7c6af7" font-family="sans-serif" letter-spacing="0.05em">ENV AGENT</text>
+  <text x="327" y="85" text-anchor="middle" font-size="8" fill="#38c9d4" font-family="sans-serif" letter-spacing="0.05em">STATIC AGENT</text>
+  <text x="457" y="85" text-anchor="middle" font-size="8" fill="#a78bfa" font-family="sans-serif" letter-spacing="0.05em">PLANNER AGENT</text>
+  <text x="587" y="85" text-anchor="middle" font-size="8" fill="#4ade80" font-family="sans-serif" letter-spacing="0.05em">EXECUTOR</text>
+  <text x="721" y="85" text-anchor="middle" font-size="8" fill="#f87171" font-family="sans-serif" letter-spacing="0.05em">REFINER</text>
+
+  <!-- ═══ INPUT ═══ -->
+  <rect x="24" y="102" width="94" height="46" rx="8" fill="#1a1d2c" stroke="#2e3258" stroke-width="1.2"/>
+  <text x="71" y="121" text-anchor="middle" font-size="10" fill="#c0c4e0" font-family="sans-serif" font-weight="600">人工框架</text>
+  <text x="71" y="136" text-anchor="middle" font-size="8.5" fill="#4a4f70">project / goals</text>
+
+  <rect x="24" y="162" width="94" height="40" rx="7" fill="#141625" stroke="#232640" stroke-width="1"/>
+  <text x="71" y="178" text-anchor="middle" font-size="9" fill="#8085a8" font-family="sans-serif">测试目标</text>
+  <text x="71" y="191" text-anchor="middle" font-size="8" fill="#3a3f58">边界/异常/性能</text>
+
+  <!-- ═══ ENV AGENT ═══ -->
+  <rect x="146" y="102" width="102" height="46" rx="8" fill="#1e1a38" stroke="#7c6af7" stroke-width="1.4"/>
+  <text x="197" y="121" text-anchor="middle" font-size="10.5" fill="#a78bfa" font-family="sans-serif" font-weight="700">EnvAgent</text>
+  <text x="197" y="136" text-anchor="middle" font-size="8" fill="#5a5080">OS 探测 / 环境配置</text>
+
+  <rect x="146" y="162" width="102" height="36" rx="6" fill="#14122a" stroke="#3e3065" stroke-width="1"/>
+  <text x="197" y="176" text-anchor="middle" font-size="9" fill="#7c6af7" font-family="sans-serif">shutil.which</text>
+  <text x="197" y="189" text-anchor="middle" font-size="8" fill="#3e3565">glob 全盘搜索</text>
+
+  <rect x="146" y="210" width="102" height="36" rx="6" fill="#14122a" stroke="#3e3065" stroke-width="1"/>
+  <text x="197" y="224" text-anchor="middle" font-size="9" fill="#7c6af7" font-family="sans-serif">LLM 选编译器</text>
+  <text x="197" y="237" text-anchor="middle" font-size="8" fill="#3e3565">路径自动修正</text>
+
+  <rect x="146" y="258" width="102" height="36" rx="6" fill="#14122a" stroke="#3e3065" stroke-width="1"/>
+  <text x="197" y="272" text-anchor="middle" font-size="9" fill="#7c6af7" font-family="sans-serif">winget / pip 安装</text>
+  <text x="197" y="285" text-anchor="middle" font-size="8" fill="#3e3565">自动安装依赖</text>
+
+  <!-- ═══ STATIC AGENT ═══ -->
+  <rect x="276" y="102" width="102" height="46" rx="8" fill="#0f2535" stroke="#38c9d4" stroke-width="1.4"/>
+  <text x="327" y="121" text-anchor="middle" font-size="10.5" fill="#2fd9e8" font-family="sans-serif" font-weight="700">StaticAgent</text>
+  <text x="327" y="136" text-anchor="middle" font-size="8" fill="#2a607a">源码风险提炼</text>
+
+  <rect x="276" y="162" width="102" height="36" rx="6" fill="#0c1e2c" stroke="#1e4a5e" stroke-width="1"/>
+  <text x="327" y="176" text-anchor="middle" font-size="9" fill="#38c9d4" font-family="sans-serif">关键词分层扫描</text>
+  <text x="327" y="189" text-anchor="middle" font-size="8" fill="#1a4055">高/中/低风险</text>
+
+  <rect x="276" y="210" width="102" height="36" rx="6" fill="#0c1e2c" stroke="#1e4a5e" stroke-width="1"/>
+  <text x="327" y="224" text-anchor="middle" font-size="9" fill="#38c9d4" font-family="sans-serif">LLM 推荐函数</text>
+  <text x="327" y="237" text-anchor="middle" font-size="8" fill="#1a4055">增量历史去重</text>
+
+  <rect x="276" y="258" width="102" height="36" rx="6" fill="#0c1e2c" stroke="#1e4a5e" stroke-width="1"/>
+  <text x="327" y="272" text-anchor="middle" font-size="9" fill="#38c9d4" font-family="sans-serif">风险点综合提炼</text>
+  <text x="327" y="285" text-anchor="middle" font-size="8" fill="#1a4055">跨轮次覆盖记录</text>
+
+  <!-- ═══ PLANNER AGENT ═══ -->
+  <rect x="406" y="102" width="102" height="46" rx="8" fill="#1f1538" stroke="#a78bfa" stroke-width="1.4"/>
+  <text x="457" y="121" text-anchor="middle" font-size="10.5" fill="#c4b5fd" font-family="sans-serif" font-weight="700">PlannerAgent</text>
+  <text x="457" y="136" text-anchor="middle" font-size="8" fill="#6c5a9a">测试任务生成</text>
+
+  <rect x="406" y="162" width="102" height="36" rx="6" fill="#160f2c" stroke="#3a2065" stroke-width="1"/>
+  <text x="457" y="176" text-anchor="middle" font-size="9" fill="#a78bfa" font-family="sans-serif">LLM 生成任务</text>
+  <text x="457" y="189" text-anchor="middle" font-size="8" fill="#3a2065">框架+风险点融合</text>
+
+  <rect x="406" y="210" width="102" height="36" rx="6" fill="#160f2c" stroke="#3a2065" stroke-width="1"/>
+  <text x="457" y="224" text-anchor="middle" font-size="9" fill="#a78bfa" font-family="sans-serif">Oracle 自动校验</text>
+  <text x="457" y="237" text-anchor="middle" font-size="8" fill="#3a2065">试运行修正期望值</text>
+
+  <rect x="406" y="258" width="102" height="36" rx="6" fill="#160f2c" stroke="#3a2065" stroke-width="1"/>
+  <text x="457" y="272" text-anchor="middle" font-size="9" fill="#a78bfa" font-family="sans-serif">SQLite 退出码规范</text>
+  <text x="457" y="285" text-anchor="middle" font-size="8" fill="#3a2065">三元结构断言</text>
+
+  <!-- ═══ EXECUTOR ═══ -->
+  <rect x="536" y="102" width="102" height="46" rx="8" fill="#0f2a18" stroke="#4ade80" stroke-width="1.4"/>
+  <text x="587" y="121" text-anchor="middle" font-size="10.5" fill="#4ade80" font-family="sans-serif" font-weight="700">ExecutorAgent</text>
+  <text x="587" y="136" text-anchor="middle" font-size="8" fill="#2a6a3a">终端执行 / 三元判定</text>
+
+  <rect x="536" y="162" width="102" height="36" rx="6" fill="#0a1f10" stroke="#1e4a28" stroke-width="1"/>
+  <text x="587" y="176" text-anchor="middle" font-size="9" fill="#4ade80" font-family="sans-serif">subprocess</text>
+  <text x="587" y="189" text-anchor="middle" font-size="8" fill="#1e4028">stdout/stderr/rc</text>
+
+  <rect x="536" y="210" width="102" height="36" rx="6" fill="#0a1f10" stroke="#1e4a28" stroke-width="1"/>
+  <text x="587" y="224" text-anchor="middle" font-size="9" fill="#4ade80" font-family="sans-serif">语义级判定</text>
+  <text x="587" y="237" text-anchor="middle" font-size="8" fill="#1e4028">LLM 分析失败原因</text>
+
+  <rect x="536" y="258" width="102" height="36" rx="6" fill="#0a1f10" stroke="#1e4a28" stroke-width="1"/>
+  <text x="587" y="272" text-anchor="middle" font-size="9" fill="#4ade80" font-family="sans-serif">I/O 持久化</text>
+  <text x="587" y="285" text-anchor="middle" font-size="8" fill="#1e4028">session.jsonl 记录</text>
+
+  <!-- ═══ REFINER ═══ -->
+  <rect x="666" y="102" width="110" height="46" rx="8" fill="#2a100f" stroke="#f87171" stroke-width="1.4"/>
+  <text x="721" y="121" text-anchor="middle" font-size="10.5" fill="#f87171" font-family="sans-serif" font-weight="700">RefinementAgent</text>
+  <text x="721" y="136" text-anchor="middle" font-size="8" fill="#7a2a2a">失败精化 / Bug确认</text>
+
+  <rect x="666" y="162" width="110" height="36" rx="6" fill="#1f0a0a" stroke="#4a1a1a" stroke-width="1"/>
+  <text x="721" y="176" text-anchor="middle" font-size="9" fill="#f87171" font-family="sans-serif">缩小输入范围</text>
+  <text x="721" y="189" text-anchor="middle" font-size="8" fill="#4a1a1a">边界值微调</text>
+
+  <rect x="666" y="210" width="110" height="36" rx="6" fill="#1f0a0a" stroke="#4a1a1a" stroke-width="1"/>
+  <text x="721" y="224" text-anchor="middle" font-size="9" fill="#f87171" font-family="sans-serif">多轮迭代（≤3轮）</text>
+  <text x="721" y="237" text-anchor="middle" font-size="8" fill="#4a1a1a">去重 · 不重复已测</text>
+
+  <rect x="666" y="258" width="110" height="36" rx="6" fill="#1f0a0a" stroke="#4a1a1a" stroke-width="1"/>
+  <text x="721" y="272" text-anchor="middle" font-size="9" fill="#f87171" font-family="sans-serif">缺陷 vs 设计误差</text>
+  <text x="721" y="285" text-anchor="middle" font-size="8" fill="#4a1a1a">LLM 语义分类</text>
+
+  <!-- ═══ OUTPUT BAR ═══ -->
+  <rect x="16" y="474" width="768" height="52" rx="9" fill="#141830" stroke="#2e3460" stroke-width="1"/>
+  <text x="400" y="493" text-anchor="middle" font-size="9" fill="#3a4070" font-family="sans-serif" font-weight="600">OUTPUT</text>
+  <text x="185" y="511" text-anchor="middle" font-size="10" fill="#8088b8" font-family="sans-serif">📄 Markdown 报告</text>
+  <text x="400" y="511" text-anchor="middle" font-size="10" fill="#8088b8" font-family="sans-serif">📊 JSON 结构化数据</text>
+  <text x="615" y="511" text-anchor="middle" font-size="10" fill="#8088b8" font-family="sans-serif">🖥 Web 实时回放</text>
+
+  <!-- ═══ MAIN FLOW ARROWS ═══ -->
+  <line x1="118" y1="125" x2="144" y2="125" stroke="#6c6c8a" stroke-width="1.4" marker-end="url(#a)"/>
+  <line x1="248" y1="125" x2="274" y2="125" stroke="#6c6c8a" stroke-width="1.4" marker-end="url(#a)"/>
+  <line x1="378" y1="125" x2="404" y2="125" stroke="#6c6c8a" stroke-width="1.4" marker-end="url(#a)"/>
+  <line x1="508" y1="125" x2="534" y2="125" stroke="#6c6c8a" stroke-width="1.4" marker-end="url(#a)"/>
+  <line x1="638" y1="125" x2="664" y2="125" stroke="#6c6c8a" stroke-width="1.4" marker-end="url(#a)"/>
+
+  <!-- Vertical arrows within lanes -->
+  <!-- input -->
+  <line x1="71" y1="148" x2="71" y2="160" stroke="#3a3f6060" stroke-width="1" marker-end="url(#a)"/>
+  <!-- env -->
+  <line x1="197" y1="148" x2="197" y2="160" stroke="#7c6af760" stroke-width="1" marker-end="url(#av)"/>
+  <line x1="197" y1="198" x2="197" y2="208" stroke="#7c6af760" stroke-width="1" marker-end="url(#av)"/>
+  <line x1="197" y1="246" x2="197" y2="256" stroke="#7c6af760" stroke-width="1" marker-end="url(#av)"/>
+  <!-- static -->
+  <line x1="327" y1="148" x2="327" y2="160" stroke="#38c9d460" stroke-width="1" marker-end="url(#ac)"/>
+  <line x1="327" y1="198" x2="327" y2="208" stroke="#38c9d460" stroke-width="1" marker-end="url(#ac)"/>
+  <line x1="327" y1="246" x2="327" y2="256" stroke="#38c9d460" stroke-width="1" marker-end="url(#ac)"/>
+  <!-- planner -->
+  <line x1="457" y1="148" x2="457" y2="160" stroke="#a78bfa60" stroke-width="1" marker-end="url(#av)"/>
+  <line x1="457" y1="198" x2="457" y2="208" stroke="#a78bfa60" stroke-width="1" marker-end="url(#av)"/>
+  <line x1="457" y1="246" x2="457" y2="256" stroke="#a78bfa60" stroke-width="1" marker-end="url(#av)"/>
+  <!-- executor -->
+  <line x1="587" y1="148" x2="587" y2="160" stroke="#4ade8060" stroke-width="1" marker-end="url(#ag)"/>
+  <line x1="587" y1="198" x2="587" y2="208" stroke="#4ade8060" stroke-width="1" marker-end="url(#ag)"/>
+  <line x1="587" y1="246" x2="587" y2="256" stroke="#4ade8060" stroke-width="1" marker-end="url(#ag)"/>
+  <!-- refiner -->
+  <line x1="721" y1="148" x2="721" y2="160" stroke="#f8717160" stroke-width="1" marker-end="url(#ar)"/>
+  <line x1="721" y1="198" x2="721" y2="208" stroke="#f8717160" stroke-width="1" marker-end="url(#ar)"/>
+  <line x1="721" y1="246" x2="721" y2="256" stroke="#f8717160" stroke-width="1" marker-end="url(#ar)"/>
+
+  <!-- Refine loop back to executor -->
+  <path d="M 666 220 Q 638 220 638 180 Q 638 148 636 148" fill="none" stroke="#f8717150" stroke-width="1.4" stroke-dasharray="4,3" marker-end="url(#ar)"/>
+  <text x="630" y="196" font-size="7.5" fill="#f8717180" text-anchor="middle" font-family="sans-serif">精化</text>
+  <text x="630" y="206" font-size="7.5" fill="#f8717180" text-anchor="middle" font-family="sans-serif">循环</text>
+
+  <!-- down to output -->
+  <line x1="71"  y1="460" x2="71"  y2="472" stroke="#3a3f6050" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="197" y1="294" x2="197" y2="472" stroke="#7c6af740" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="327" y1="294" x2="327" y2="472" stroke="#38c9d440" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="457" y1="294" x2="457" y2="472" stroke="#a78bfa40" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="587" y1="294" x2="587" y2="472" stroke="#4ade8040" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="721" y1="294" x2="721" y2="472" stroke="#f8717140" stroke-width="1" stroke-dasharray="3,3"/>
+
+  <!-- Static → Planner (风险点传递, special arrow) -->
+  <path d="M 378 270 Q 392 270 406 250" fill="none" stroke="#a78bfa60" stroke-width="1.2" stroke-dasharray="4,2" marker-end="url(#av)"/>
+  <text x="392" y="265" font-size="7.5" fill="#a78bfa80" text-anchor="middle" font-family="sans-serif">风险点</text>
+
+  <!-- ═══ LEGEND ═══ -->
+  <rect x="16" y="310" width="118" height="152" rx="8" fill="#111420" stroke="#1e2238" stroke-width="1"/>
+  <text x="28" y="328" font-size="8.5" fill="#3a4070" font-weight="700" font-family="sans-serif" letter-spacing="0.08em">LEGEND</text>
+  <rect x="28" y="336" width="9" height="9" rx="2" fill="#7c6af720" stroke="#7c6af7" stroke-width="1"/>
+  <text x="42" y="344" font-size="8.5" fill="#8085a8" font-family="sans-serif">自动环境配置</text>
+  <rect x="28" y="352" width="9" height="9" rx="2" fill="#38c9d420" stroke="#38c9d4" stroke-width="1"/>
+  <text x="42" y="360" font-size="8.5" fill="#8085a8" font-family="sans-serif">白盒静态分析</text>
+  <rect x="28" y="368" width="9" height="9" rx="2" fill="#a78bfa20" stroke="#a78bfa" stroke-width="1"/>
+  <text x="42" y="376" font-size="8.5" fill="#8085a8" font-family="sans-serif">LLM 任务规划</text>
+  <rect x="28" y="384" width="9" height="9" rx="2" fill="#4ade8020" stroke="#4ade80" stroke-width="1"/>
+  <text x="42" y="392" font-size="8.5" fill="#8085a8" font-family="sans-serif">黑盒执行验证</text>
+  <rect x="28" y="400" width="9" height="9" rx="2" fill="#f8717120" stroke="#f87171" stroke-width="1"/>
+  <text x="42" y="408" font-size="8.5" fill="#8085a8" font-family="sans-serif">失败迭代精化</text>
+  <line x1="28" y1="421" x2="40" y2="421" stroke="#6c6c8a" stroke-width="1.4" marker-end="url(#a)"/>
+  <text x="46" y="425" font-size="8.5" fill="#8085a8" font-family="sans-serif">主流程</text>
+  <line x1="28" y1="437" x2="40" y2="437" stroke="#f8717170" stroke-width="1.4" stroke-dasharray="4,3"/>
+  <text x="46" y="441" font-size="8.5" fill="#8085a8" font-family="sans-serif">反馈/传递</text>
+  <line x1="28" y1="453" x2="40" y2="453" stroke="#4a4f7060" stroke-width="1" stroke-dasharray="3,3"/>
+  <text x="46" y="457" font-size="8.5" fill="#8085a8" font-family="sans-serif">输出汇总</text>
+</svg>
