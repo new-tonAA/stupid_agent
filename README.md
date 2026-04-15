@@ -161,6 +161,20 @@ TEST_FRAMEWORK = {
   <em>Figure 2: Pipeline of the testing process</em>
 </p>
 
+<p align="center">
+  <img src="readme_images/testing_agent_pipeline.svg" width="100%"/>
+</p>
+<p align="center">
+  <em>Figure 3: Detailed Pipeline 1</em>
+</p>
+
+<p align="center">
+  <img src="readme_images/testing_agent_roadmap.svg" width="100%"/>
+</p>
+<p align="center">
+  <em>Figure 4: Detailed Pipeline 2</em>
+</p>
+
 ## Oracle 类型说明
 
 | oracle_type    | 判定逻辑 |
@@ -170,6 +184,7 @@ TEST_FRAMEWORK = {
 | `stdout_match` | stdout 中包含期望字符串 |
 | `stdout_exact` | stdout 与期望字符串完全一致 |
 | `manual`       | 输出到终端，人工判断 |
+
 
 ## License
 This project is licensed under the Apache 2.0 License.
