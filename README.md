@@ -170,3 +170,6 @@ TEST_FRAMEWORK = {
 | `stdout_match` | stdout 中包含期望字符串 |
 | `stdout_exact` | stdout 与期望字符串完全一致 |
 | `manual`       | 输出到终端，人工判断 |
+
+## License
+This project is licensed under the Apache 2.0 License.
