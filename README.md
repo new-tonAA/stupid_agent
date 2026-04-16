@@ -162,17 +162,10 @@ TEST_FRAMEWORK = {
 </p>
 
 <p align="center">
-  <img src="readme_images/testing_agent_pipeline.svg" width="100%"/>
+  <img src="readme_images/roadmap.svg" width="100%"/>
 </p>
 <p align="center">
-  <em>Figure 3: Detailed Pipeline 1</em>
-</p>
-
-<p align="center">
-  <img src="readme_images/testing_agent_roadmap.svg" width="100%"/>
-</p>
-<p align="center">
-  <em>Figure 4: Detailed Pipeline 2</em>
+  <em>Figure 4: Detailed Pipeline</em>
 </p>
 
 ## Oracle 类型说明
