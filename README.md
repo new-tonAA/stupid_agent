@@ -162,7 +162,7 @@ TEST_FRAMEWORK = {
 </p>
 
 <p align="center">
-  <img src="readme_images/roadmap.svg" width="100%"/>
+  <img src="readme_images/detailpipeline.svg" width="100%"/>
 </p>
 <p align="center">
   <em>Figure 4: Detailed Pipeline</em>
