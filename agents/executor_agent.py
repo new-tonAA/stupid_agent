@@ -1,4 +1,4 @@
-# agents/executor_agent.py  —— Agent 2：测试执行与分析智能体
+# agents/executor_agent.py  —— 测试执行与分析智能体
 """
 判定机制：基于 stdout / stderr / returncode 三元结构的行为验证
 """
