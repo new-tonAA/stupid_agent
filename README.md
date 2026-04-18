@@ -136,6 +136,11 @@ python main.py
 python web_app.py
 ```
 
+### 5. 打包成exe（看个人需求）
+```bash
+pyinstaller -F web_app.py --hidden-import=core --hidden-import=agents --hidden-import=engineio.async_drivers.threading --hidden-import=socketio.async_drivers.threading
+```
+
 ## 换成自己的被测项目
 
 只需要修改 `main.py` 或 `web_app.py` 中的 `TEST_FRAMEWORK`：
