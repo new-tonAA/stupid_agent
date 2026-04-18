@@ -2147,6 +2147,7 @@ def on_start(data):
     if test_running:
         emit('log', {'text': 'A test run is already in progress.', 'type': 'fail'})
         return
+    os.environ['APP_OUTPUT_DIR'] = os.path.join(APP_ROOT, 'output')
     os.environ['ANTHROPIC_API_KEY'] = data.get('api_key', '')
     os.environ['LLM_PROVIDER'] = data.get('provider', 'openrouter')
     m = data.get('model', '')
@@ -2423,6 +2424,9 @@ def _run(sid, prompt, custom_fw, session_id=None):
             all_rpts.append(rr); all_tasks.extend(ntasks); cur = rr
 
         final = merge_reports(report, all_rpts) if all_rpts else report
+        import config as _cfg
+        _cfg.OUTPUT_DIR = os.path.join(APP_ROOT, 'output')
+        os.makedirs(_cfg.OUTPUT_DIR, exist_ok=True)
         rep = Reporter()
         jp, mp = rep.save(final)
         if session_log_path:
