@@ -1,4 +1,4 @@
-# 斯丢匹得软件测试智能体 —— Stupid Tesing Agent
+# 斯丢匹得软件测试智能体 —— Stupid Agent (Testing Agent)
 
 <p align="center">
   <img src="readme_images/UI.png" width="100%"/>
